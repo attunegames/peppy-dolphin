@@ -1,0 +1,16 @@
+name: Canary
+
+# Diagnostic only: proves whether Actions runs at all in this repo.
+# Ubuntu bills at 1x and this finishes in seconds. Delete once the real
+# Windows build is confirmed working.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Actions is alive in this repository."
