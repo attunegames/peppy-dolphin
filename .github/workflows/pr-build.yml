@@ -25,7 +25,9 @@ jobs:
   # goal is to prevent merges when the commit is not from the main branch, builds should still succeed
   check_rust_commit:
     needs: [skip_duplicates]
-    if: ${{ needs.skip_duplicates.outputs.should_skip != 'true' }}
+    # Peppy fork: this enforces upstream's merge policy, not ours. Leaving it on
+    # only produces a red X on every build we run.
+    if: false
     name: Verify SlippiRustExtensions Commit is in Main
     runs-on: ubuntu-latest
     steps:
@@ -44,7 +46,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build_type: [Netplay, Playback]
+        # Peppy fork: Netplay only. Playback doubles the build cost and we are
+        # not changing anything it exercises.
+        build_type: [Netplay]
         include:
           - build_type: Netplay
             artifact_name: windows-netplay
@@ -157,7 +161,9 @@ jobs:
 
   linux:
     needs: [skip_duplicates]
-    if: ${{ needs.skip_duplicates.outputs.should_skip != 'true' }}
+    # Peppy fork: Windows only while this is private. Free minutes are limited
+    # and every platform we do not test on is pure cost.
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -270,7 +276,9 @@ jobs:
 
   macOS:
     needs: [skip_duplicates]
-    if: ${{ needs.skip_duplicates.outputs.should_skip != 'true' }}
+    # Peppy fork: disabled. macOS runners bill at 10x - one push here would
+    # spend most of a month's free budget.
+    if: false
     strategy:
       fail-fast: false
       matrix:
