@@ -53,9 +53,6 @@ jobs:
           - build_type: Netplay
             artifact_name: windows-netplay
             build_config: Release
-          - build_type: Playback
-            artifact_name: windows-playback
-            build_config: ReleasePlayback
     env:
       DXSDK_DIR: "C:\\Program Files (x86)\\Microsoft DirectX SDK (June 2010)\\"
     name: "Windows ${{ matrix.build_type }}"
