@@ -84,7 +84,29 @@ jobs:
       - name: "Install DirectX SDK Redist"
         shell: powershell
         run: |
-          choco install directx-sdk
+          # Peppy fork: the Chocolatey community feed intermittently answers 406
+          # and takes the whole build down with it - a dependency on someone
+          # else's uptime for a package that never changes. Retry, then fall
+          # back to Microsoft's own installer.
+          $dxdir = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
+          $ok = $false
+          for ($i = 1; $i -le 4; $i++) {
+            choco install directx-sdk -y --no-progress
+            if (Test-Path "$dxdir\Lib\x64") { $ok = $true; break }
+            Write-Host "choco attempt $i did not produce the SDK; retrying in 20s"
+            Start-Sleep -Seconds 20
+          }
+          if (-not $ok) {
+            Write-Host "Chocolatey unusable - installing the June 2010 SDK from Microsoft"
+            $url = "https://download.microsoft.com/download/A/E/7/AE743F1F-632B-4809-87A9-AA1BB3458E31/DXSDK_Jun10.exe"
+            $exe = Join-Path $env:RUNNER_TEMP "DXSDK_Jun10.exe"
+            Invoke-WebRequest -Uri $url -OutFile $exe
+            Start-Process -Wait -FilePath $exe -ArgumentList "/U"
+          }
+          if (-not (Test-Path "$dxdir\Lib\x64")) {
+            throw "DirectX SDK is not installed - DX9 and XAudio2 will not compile"
+          }
+          Write-Host "DirectX SDK present at $dxdir"
       - name: 'Fetch Git Tags'
         shell: bash
         if: success()
