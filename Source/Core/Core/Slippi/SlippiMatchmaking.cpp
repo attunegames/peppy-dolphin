@@ -577,6 +577,18 @@ void SlippiMatchmaking::startMatchmaking()
 			return;
 		}
 
+		// Every retry binds a NEW random port, which makes any endpoint we
+		// published for the last one a lie - and while it is still inside the
+		// freshness window the room would happily pair on it, sending the
+		// opponent at a socket that no longer exists. Clear it on the way in so
+		// nothing can pair until we have measured the port we are actually on.
+		json reset;
+		reset["p_room"] = PeppyCfg().room;
+		reset["p_name"] = PeppyCfg().name;
+		reset["p_code"] = PeppyCfg().code;
+		reset["p_reset"] = true;
+		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", reset.dump(), PeppyToken());
+
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Joined room '%s' as %s on port %d", PeppyCfg().room.c_str(),
 		         PeppyCfg().code.c_str(), m_hostPort);
 		m_state = ProcessState::MATCHMAKING;
