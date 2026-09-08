@@ -1,9 +1,16 @@
 #include "SlippiMatchmaking.h"
 #include "Common/Common.h"
 #include "Common/ENetUtil.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <curl/curl.h>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "SlippiRustExtensions.h"
@@ -216,6 +223,224 @@ void SlippiMatchmaking::terminateMmConnection()
 	}
 }
 
+// ============================================================================
+//                                Peppy matchmaking
+// ============================================================================
+//
+// Slippi's matchmaking server does two jobs: it decides who plays whom, and -
+// because the client deliberately talks to it from the netplay port - the
+// packet it sends opens the NAT mapping the opponent will later connect to. It
+// is a directory AND an accomplice in the hole punch.
+//
+// Peppy needs the first job to be its own (rooms, a queue, winner stays) and
+// gets the second for free from STUN: a binding request sent from that same
+// socket opens the identical mapping and reports what the internet saw. Public
+// STUN servers are free, so there is no server to run and nothing to pay for.
+//
+// Symmetric NATs still lose - the mapping differs per destination, so what the
+// STUN server saw is not what the peer gets. Slippi has that same limitation
+// for the same reason; those players port forward either way.
+//
+// Nothing below this block changes. The ENet connection, rollback and the
+// character select handshake only ever consume the parsed result, so they
+// cannot tell the difference.
+namespace
+{
+struct PeppyConfig
+{
+	bool ok = false;
+	std::string url, key, room, name, code;
+};
+
+PeppyConfig ReadPeppyConfig()
+{
+	PeppyConfig cfg;
+	std::ifstream file(File::GetUserPath(D_CONFIG_IDX) + "peppy.json");
+	if (!file.good())
+		return cfg;
+	try
+	{
+		json j;
+		file >> j;
+		cfg.url = j.value("supabaseUrl", "");
+		cfg.key = j.value("supabaseKey", "");
+		cfg.room = j.value("roomCode", "");
+		cfg.name = j.value("displayName", "");
+		cfg.code = j.value("connectCode", "");
+		// No room means Peppy is not driving this launch - fall through to the
+		// normal Slippi matchmaking rather than half-using ours.
+		cfg.ok = !cfg.url.empty() && !cfg.key.empty() && !cfg.room.empty();
+	}
+	catch (...)
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] peppy.json could not be read");
+	}
+	return cfg;
+}
+
+const PeppyConfig &PeppyCfg()
+{
+	static PeppyConfig cfg = ReadPeppyConfig();
+	return cfg;
+}
+
+size_t PeppyCurlWrite(char *ptr, size_t size, size_t nmemb, void *out)
+{
+	static_cast<std::string *>(out)->append(ptr, size * nmemb);
+	return size * nmemb;
+}
+
+std::string PeppyPost(const std::string &url, const std::string &body, const std::string &bearer)
+{
+	CURL *curl = curl_easy_init();
+	if (!curl)
+		return "";
+
+	std::string out;
+	struct curl_slist *headers = nullptr;
+	headers = curl_slist_append(headers, ("apikey: " + PeppyCfg().key).c_str());
+	headers = curl_slist_append(headers, "Content-Type: application/json");
+	if (!bearer.empty())
+		headers = curl_slist_append(headers, ("Authorization: Bearer " + bearer).c_str());
+
+	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, PeppyCurlWrite);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+
+	CURLcode res = curl_easy_perform(curl);
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(curl);
+
+	if (res != CURLE_OK)
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] HTTP failed: %s", curl_easy_strerror(res));
+		return "";
+	}
+	return out;
+}
+
+std::string &PeppyToken()
+{
+	static std::string token;
+	return token;
+}
+
+// Dolphin signs in for itself rather than being handed a token by Peppy. Tokens
+// expire in about an hour, and refreshing a file underneath a running emulator
+// is a worse problem than one extra request.
+bool PeppySignIn()
+{
+	if (!PeppyToken().empty())
+		return true;
+
+	std::string resp = PeppyPost(PeppyCfg().url + "/auth/v1/signup", "{}", "");
+	try
+	{
+		json j = json::parse(resp);
+		PeppyToken() = j.value("access_token", "");
+	}
+	catch (...)
+	{
+	}
+	return !PeppyToken().empty();
+}
+
+struct PeppyStunServer
+{
+	const char *host;
+	u16 port;
+};
+const PeppyStunServer PEPPY_STUN[] = {
+    {"stun.l.google.com", 19302},
+    {"stun1.l.google.com", 19302},
+    {"stun.cloudflare.com", 3478},
+};
+
+// A STUN binding request and the one attribute we care about. This MUST go out
+// of the socket the game will play on - a hole punched for any other socket
+// reaches nobody.
+bool PeppyStun(ENetSocket sock, std::string &out)
+{
+	for (const auto &server : PEPPY_STUN)
+	{
+		ENetAddress addr;
+		if (enet_address_set_host(&addr, server.host) < 0)
+			continue;
+		addr.port = server.port;
+
+		u8 req[20] = {0};
+		req[1] = 0x01;                                     // binding request
+		req[4] = 0x21; req[5] = 0x12; req[6] = 0xA4; req[7] = 0x42;  // magic cookie
+		for (int i = 8; i < 20; i++)
+			req[i] = (u8)(rand() & 0xFF);                  // transaction id
+
+		ENetBuffer sendBuf;
+		sendBuf.data = req;
+		sendBuf.dataLength = sizeof(req);
+		if (enet_socket_send(sock, &addr, &sendBuf, 1) <= 0)
+			continue;
+
+		u8 resp[512];
+		ENetBuffer recvBuf;
+		recvBuf.data = resp;
+		recvBuf.dataLength = sizeof(resp);
+
+		enet_uint32 cond = ENET_SOCKET_WAIT_RECEIVE;
+		if (enet_socket_wait(sock, &cond, 2000) != 0 || !(cond & ENET_SOCKET_WAIT_RECEIVE))
+			continue;
+
+		ENetAddress from;
+		int len = enet_socket_receive(sock, &from, &recvBuf, 1);
+		if (len < 20 || resp[0] != 0x01 || resp[1] != 0x01)
+			continue;
+		if (memcmp(resp + 8, req + 8, 12) != 0)
+			continue;                                      // not our request
+
+		int end = 20 + ((resp[2] << 8) | resp[3]);
+		if (end > len)
+			end = len;
+
+		for (int off = 20; off + 4 <= end;)
+		{
+			int type = (resp[off] << 8) | resp[off + 1];
+			int alen = (resp[off + 2] << 8) | resp[off + 3];
+			const u8 *v = resp + off + 4;
+
+			// XOR-MAPPED-ADDRESS is obfuscated with the cookie so middleboxes
+			// cannot helpfully rewrite the IP inside it. MAPPED-ADDRESS is the
+			// older plain form.
+			if ((type == 0x0020 || type == 0x0001) && alen >= 8 && v[1] == 0x01)
+			{
+				bool xored = type == 0x0020;
+				u16 port = (u16)(((v[2] << 8) | v[3]) ^ (xored ? 0x2112 : 0));
+				u8 ip[4];
+				for (int i = 0; i < 4; i++)
+					ip[i] = v[4 + i] ^ (xored ? req[4 + i] : 0);
+
+				char buf[64];
+				sprintf(buf, "%u.%u.%u.%u:%u", ip[0], ip[1], ip[2], ip[3], port);
+				out = buf;
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] STUN says we are %s", out.c_str());
+				return true;
+			}
+			off += 4 + alen + ((4 - (alen % 4)) % 4);       // attributes pad to 4
+		}
+	}
+
+	ERROR_LOG(SLIPPI_ONLINE, "[Peppy] No STUN server answered");
+	return false;
+}
+
+std::string PeppyIpOf(const std::string &endpoint)
+{
+	auto colon = endpoint.find(':');
+	return colon == std::string::npos ? endpoint : endpoint.substr(0, colon);
+}
+} // namespace
+
 // Fallback: arbitrarily choose the last available local IP address listed. They seem to be listed in decreasing order
 // IE. 192.168.0.100 > 192.168.0.10 > 10.0.0.2
 static char *getLocalAddressFallback()
@@ -336,6 +561,25 @@ void SlippiMatchmaking::startMatchmaking()
 		m_state = ProcessState::ERROR_ENCOUNTERED;
 		m_errorMsg = "Failed to create mm client";
 		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Failed to create client...");
+		return;
+	}
+
+	// Peppy runs its own matchmaking. The socket above is bound and that is all
+	// we needed from this step - no connection to Slippi's server is made, and
+	// the hole gets punched by a STUN request from that same socket once there
+	// is actually somebody to play.
+	if (PeppyCfg().ok)
+	{
+		if (!PeppySignIn())
+		{
+			m_state = ProcessState::ERROR_ENCOUNTERED;
+			m_errorMsg = "Could not reach the Peppy server";
+			return;
+		}
+
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Joined room '%s' as %s on port %d", PeppyCfg().room.c_str(),
+		         PeppyCfg().code.c_str(), m_hostPort);
+		m_state = ProcessState::MATCHMAKING;
 		return;
 	}
 
@@ -469,11 +713,168 @@ void SlippiMatchmaking::startMatchmaking()
 	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Request ticket success");
 }
 
+// The matchmake thread has no pacing of its own - the Slippi path is paced by a
+// blocking receive. Ours polls HTTP, so it has to wait deliberately.
+void SlippiMatchmaking::peppySleep()
+{
+	std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+}
+
+// One turn of the room loop. Answers are "waiting", "stun" or "ready":
+//
+//   waiting  nobody else is here. Send nothing over UDP - a hole punched now
+//            would just be closed again by the time anyone arrived.
+//   stun     someone to play. Measure the mapping and publish it. Both clients
+//            are told this at the same moment, so both mappings are seconds old
+//            when the dial happens.
+//   ready    both endpoints are fresh. Hand Slippi the addresses and get out of
+//            the way.
+void SlippiMatchmaking::handlePeppyMatchmaking()
+{
+	const PeppyConfig &cfg = PeppyCfg();
+
+	json body;
+	body["p_room"] = cfg.room;
+	body["p_name"] = cfg.name;
+	body["p_code"] = cfg.code;
+
+	std::string raw = PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
+	json resp;
+	try
+	{
+		resp = json::parse(raw);
+	}
+	catch (...)
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Bad response from room: %s", raw.c_str());
+		peppySleep();
+		return;
+	}
+
+	std::string state = resp.value("state", "");
+
+	if (state == "waiting")
+	{
+		peppySleep();
+		return;
+	}
+
+	if (state == "stun")
+	{
+		std::string external;
+		if (!PeppyStun(m_client->socket, external))
+		{
+			peppySleep();
+			return;
+		}
+
+		// The LAN address lets two players behind one router skip the internet
+		// entirely, exactly as Slippi does it.
+		char lanAddr[64] = "";
+		ENetAddress probe;
+		if (enet_address_set_host(&probe, PEPPY_STUN[0].host) == 0)
+		{
+			probe.port = PEPPY_STUN[0].port;
+			enet_uint32 local = getLocalAddress(&probe);
+			if (local != 0)
+				sprintf(lanAddr, "%s:%d", inet_ntoa(*(struct in_addr *)&local), m_hostPort);
+		}
+
+		body["p_external"] = external;
+		body["p_lan"] = std::string(lanAddr);
+		PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
+		peppySleep();
+		return;
+	}
+
+	if (state != "ready")
+	{
+		if (state == "error")
+			ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room error: %s", resp.value("error", "").c_str());
+		peppySleep();
+		return;
+	}
+
+	// ---- paired ------------------------------------------------------------
+
+	m_isSwapAttempt = false;
+	m_netplayClient = nullptr;
+	m_remoteIps.clear();
+	m_playerInfo.clear();
+
+	m_isHost = resp.value("isHost", false);
+	json me = resp["me"], opp = resp["opponent"];
+
+	// The room assigns ports, so who is P1 is decided by who held the setup
+	// rather than by anything in Melee.
+	SlippiUser::UserInfo mine, theirs;
+	mine.displayName = me.value("name", "");
+	mine.connectCode = me.value("code", "");
+	mine.uid = mine.connectCode;
+	mine.port = m_isHost ? 1 : 2;
+	mine.chatMessages = m_user->GetDefaultChatMessages();
+
+	theirs.displayName = opp.value("name", "");
+	theirs.connectCode = opp.value("code", "");
+	theirs.uid = theirs.connectCode;
+	theirs.port = m_isHost ? 2 : 1;
+	theirs.chatMessages = m_user->GetDefaultChatMessages();
+
+	if (m_isHost)
+	{
+		m_playerInfo.push_back(mine);
+		m_playerInfo.push_back(theirs);
+	}
+	else
+	{
+		m_playerInfo.push_back(theirs);
+		m_playerInfo.push_back(mine);
+	}
+	m_localPlayerIndex = mine.port - 1;
+
+	std::string myExternal = me.value("external", "");
+	std::string oppExternal = opp.value("external", "");
+	std::string oppLan = opp.value("lan", "");
+
+	if (!oppLan.empty() && PeppyIpOf(myExternal) == PeppyIpOf(oppExternal))
+		m_remoteIps.push_back(oppLan);
+	else
+		m_remoteIps.push_back(oppExternal);
+
+	m_allowedStages.clear();
+	m_allowedStages.push_back(0x3);  // Pokemon Stadium
+	m_allowedStages.push_back(0x8);  // Yoshi's Story
+	m_allowedStages.push_back(0x1C); // Dream Land
+	m_allowedStages.push_back(0x1F); // Battlefield
+	m_allowedStages.push_back(0x20); // Final Destination
+	m_allowedStages.push_back(0x2);  // Fountain of Dreams
+
+	m_mmResult.id = resp.value("matchId", "");
+	m_mmResult.players = m_playerInfo;
+	m_mmResult.stages = m_allowedStages;
+	m_mmResult.items = 0;
+
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Matched with %s at %s (isHost: %s)", theirs.displayName.c_str(),
+	         m_remoteIps[0].c_str(), m_isHost ? "true" : "false");
+
+	// Frees the port so the netplay client can bind it. The NAT mapping we just
+	// opened survives, because routers key them on the port, not the socket.
+	terminateMmConnection();
+
+	m_state = ProcessState::OPPONENT_CONNECTING;
+}
+
 void SlippiMatchmaking::handleMatchmaking()
 {
 	// Deal with class shut down
 	if (m_state != ProcessState::MATCHMAKING)
 		return;
+
+	if (PeppyCfg().ok)
+	{
+		handlePeppyMatchmaking();
+		return;
+	}
 
 	// Get response from server
 	json getResp;

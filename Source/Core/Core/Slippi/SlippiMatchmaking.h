@@ -101,6 +101,11 @@ class SlippiMatchmaking
 
 	std::string MM_HOST = "";
 
+	// Peppy: our own matchmaking, in place of the connection to mm.slippi.gg.
+	// See the Peppy block in SlippiMatchmaking.cpp for how it works.
+	void handlePeppyMatchmaking();
+	void peppySleep();
+
 	ENetHost *m_client;
 	ENetPeer *m_server;
 
