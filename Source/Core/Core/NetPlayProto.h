@@ -64,6 +64,10 @@ enum
 	NP_MSG_SLIPPI_CHAT_MESSAGE = 0x84,
 	NP_MSG_SLIPPI_COMPLETE_STEP = 0x85,
 	NP_MSG_SLIPPI_SYNCED_STATE = 0x86,
+	// Peppy: a watcher announcing itself. Identifying by address cannot work -
+	// several clients on one machine share a host, and players' ports legitimately
+	// change - so a watcher says who it is instead of being guessed at.
+	NP_MSG_PEPPY_WATCH = 0x8F,
 
 	NP_MSG_START_GAME = 0xA0,
 	NP_MSG_CHANGE_GAME = 0xA1,
