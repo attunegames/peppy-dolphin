@@ -931,6 +931,55 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	m_state = ProcessState::OPPONENT_CONNECTING;
 }
 
+// ------------------------------------------------------- result + rotation ---
+
+// Is anyone actually waiting to play? Asked while still paired, so the two
+// people in the match do not count themselves - if the queue is empty, they are
+// left alone to keep playing each other, which is the whole point of only
+// interrupting a set when somebody is there to take the loser's place.
+bool SlippiMatchmaking::PeppyShouldRotate()
+{
+	if (!PeppyCfg().ok)
+		return false;
+
+	json body;
+	body["p_room"] = PeppyCfg().room;
+	body["p_name"] = PeppyCfg().name;
+	body["p_code"] = PeppyCfg().code;
+
+	std::string raw = PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
+	try
+	{
+		json resp = json::parse(raw);
+		auto queue = resp.find("queue");
+		bool waiting = queue != resp.end() && queue->is_array() && queue->size() > 0;
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] %d waiting to play", waiting ? (int)queue->size() : 0);
+		return waiting;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
+// Melee tells us who won at the end of every game, so this is a report, not a
+// guess. Both clients call it with the same match id and opposite answers; the
+// room takes the first and ignores the second.
+void SlippiMatchmaking::PeppyReportResult(const std::string &matchId, bool iWon)
+{
+	if (!PeppyCfg().ok || matchId.empty())
+		return;
+
+	std::thread([matchId, iWon]() {
+		json body;
+		body["p_room"] = PeppyCfg().room;
+		body["p_match_id"] = matchId;
+		body["p_i_won"] = iWon;
+		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_result", body.dump(), PeppyToken());
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Reported %s for %s", iWon ? "a win" : "a loss", matchId.c_str());
+	}).detach();
+}
+
 void SlippiMatchmaking::handleMatchmaking()
 {
 	// Deal with class shut down

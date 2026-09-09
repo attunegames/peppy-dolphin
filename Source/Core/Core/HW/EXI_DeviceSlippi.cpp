@@ -3118,6 +3118,25 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 	          onlineMode, query.onlineMode, durationFrames, gameIndex, tiebreakIndex, winnerIdx, stageId, gameEndMethod,
 	          lrasInitiator);
 
+	// Peppy: the room needs to know who won so the winner can stay and the loser
+	// can go to the back of the queue. Melee just handed us the winning port, so
+	// there is nothing to infer.
+	//
+	// Whether to actually break up the session is a separate question: we only
+	// do it when somebody is waiting. Two people alone in a room keep playing
+	// each other, which is what anyone would expect.
+	if (matchmaking && query.onlineMode == (u8)SlippiMatchmaking::OnlinePlayMode::ROOMS)
+	{
+		bool iWon = winnerIdx == matchmaking->LocalPlayerIndex();
+		matchmaking->PeppyReportResult(matchId, iWon);
+
+		if (matchmaking->PeppyShouldRotate() && slippi_netplay)
+		{
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Someone is waiting - ending this session");
+			slippi_netplay->ForceDisconnect();
+		}
+	}
+
 	auto userInfo = user->GetUserInfo();
 
 	// We pass `uid` and `playKey` here until the User side of things is
