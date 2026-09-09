@@ -200,6 +200,11 @@ class SlippiNetplayClient
 	std::unordered_map<u8, bool> GetActivePlayerIndices();
 	void ForceDisconnectPlayer(u8 playerIdx);
 	void ForceDisconnect(SlippiDisconnectReason reason = SlippiDisconnectReason::UNSPECIFIED);
+
+	// Peppy: record an input packet for late watchers, and hand a copy to the
+	// ones already attached. Both are no-ops when nobody is watching.
+	void PeppyRecord(const u8 *data, size_t len);
+	void PeppyForward(const u8 *data, size_t len);
 	SlippiDisconnectReason GetDisconnectReason();
 	SlippiMatchInfo *GetMatchInfo();
 	SlippiPlayerSelections GetSlippiRemoteChatMessage(bool isChatEnabled);
@@ -239,6 +244,18 @@ class SlippiNetplayClient
 	// copies of the input packets and are otherwise invisible.
 	std::vector<ENetPeer *> m_spectators;
 	std::mutex m_spectators_mutex;
+
+	// Peppy: every input packet of the game so far, plus the selections that
+	// started it.
+	//
+	// A simulation has to begin at frame 0 - the state two minutes in exists only
+	// as the result of everything before it - so somebody has to keep the whole
+	// game. It is cheap: 8 bytes per frame per player, a couple of minutes of a
+	// 1v1 is well under a megabyte. A watcher joining late is handed all of it at
+	// once, runs it as fast as the emulator will go, and comes out live.
+	std::vector<std::string> m_game_history;
+	std::string m_match_selections;
+	s32 m_history_last_frame = -1;
 	std::thread m_thread;
 	u8 m_remotePlayerCount = 0;
 

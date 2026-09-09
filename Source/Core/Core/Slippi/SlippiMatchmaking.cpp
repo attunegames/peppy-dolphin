@@ -827,7 +827,9 @@ void PeppyWatch(std::string endpoint)
 
 	s32 lastFrame = -1;
 	int gaps = 0, packets = 0;
+	bool catchingUp = true, gotSelections = false;
 	u64 lastReport = Common::Timer::GetTimeMs();
+	u64 lastArrival = lastReport;
 
 	while (s_watching)
 	{
@@ -863,27 +865,51 @@ void PeppyWatch(std::string endpoint)
 			continue;
 		}
 
-		// Pad packets lead with the message id, then the frame as a big-endian
-		// s32. We only need the frame number to answer "is this stream whole".
-		if (ev.packet->dataLength >= 5 && ev.packet->data[0] == NP_MSG_SLIPPI_PAD)
+		const u8 *d = ev.packet->data;
+
+		// The selections that started the match - characters, stage, RNG offset.
+		// A watcher needs these before it could ever start a game of its own.
+		if (ev.packet->dataLength >= 1 && d[0] == NP_MSG_SLIPPI_MATCH_SELECTIONS)
 		{
-			const u8 *d = ev.packet->data;
+			gotSelections = true;
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher received match selections (%d bytes)",
+			         (int)ev.packet->dataLength);
+		}
+
+		// Pad packets lead with the message id, then the frame as a big-endian
+		// s32. The frame number answers both questions that matter: is the stream
+		// whole, and how far behind live are we.
+		if (ev.packet->dataLength >= 5 && d[0] == NP_MSG_SLIPPI_PAD)
+		{
 			s32 frame = (s32)((d[1] << 24) | (d[2] << 16) | (d[3] << 8) | d[4]);
 			packets++;
+
+			// The catch-up burst arrives far faster than a game is played. Once
+			// packets stop outrunning the clock, we are live.
+			u64 now = Common::Timer::GetTimeMs();
+			if (catchingUp && packets > 1 && now - lastArrival > 500)
+			{
+				catchingUp = false;
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] Caught up at frame %d after %d packets - now live", frame, packets);
+			}
+			lastArrival = now;
+
 			if (lastFrame >= 0 && frame > lastFrame + 1)
 				gaps++;
 			if (frame > lastFrame)
 				lastFrame = frame;
 
-			u64 now = Common::Timer::GetTimeMs();
 			if (now - lastReport > 1000)
 			{
 				lastReport = now;
 				std::stringstream out;
-				out << "WATCHING - frame " << lastFrame << "\n"
-				    << packets << " packets, " << gaps << " gaps";
+				out << (catchingUp ? "CATCHING UP - frame " : "WATCHING - frame ") << lastFrame << "\n"
+				    << packets << " packets, " << gaps << " gaps"
+				    << (gotSelections ? ", have match info" : ", NO match info");
 				OSD::AddTypedMessage(OSD::MessageType::PeppyWatch, out.str(), 4000, OSD::Color::GREEN);
-				WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching: frame %d, %d packets, %d gaps", lastFrame, packets, gaps);
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] %s frame %d, %d packets, %d gaps, selections %s",
+				         catchingUp ? "Catching up:" : "Watching:", lastFrame, packets, gaps,
+				         gotSelections ? "yes" : "no");
 			}
 		}
 		enet_packet_destroy(ev.packet);

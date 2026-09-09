@@ -201,8 +201,23 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 		if (!known)
 		{
 			m_spectators.push_back(peer);
-			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Spectator attached from %x:%d (%d watching)", peer->address.host,
-			         peer->address.port, (int)m_spectators.size());
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Spectator attached from %x:%d (%d watching), sending %d frames of history",
+			         peer->address.host, peer->address.port, (int)m_spectators.size(), (int)m_game_history.size());
+
+			// Catch them up: the selections that started the game, then every
+			// input packet since. Reliable, because a hole here is not something
+			// a later packet can repair - this IS the backlog.
+			if (!m_match_selections.empty())
+			{
+				ENetPacket *sel = enet_packet_create(m_match_selections.data(), m_match_selections.size(),
+				                                     ENET_PACKET_FLAG_RELIABLE);
+				enet_peer_send(peer, 0, sel);
+			}
+			for (const auto &pkt : m_game_history)
+			{
+				ENetPacket *hist = enet_packet_create(pkt.data(), pkt.size(), ENET_PACKET_FLAG_RELIABLE);
+				enet_peer_send(peer, 0, hist);
+			}
 		}
 		break;
 	}
@@ -684,6 +699,41 @@ std::unique_ptr<SlippiPlayerSelections> SlippiNetplayClient::readSelectionsFromP
 	return std::move(s);
 }
 
+// Peppy: keep the game so a late watcher can be caught up.
+//
+// Both directions are recorded, so a watcher attached to either player receives
+// both sides' inputs from one connection. The buffer resets when frame numbers
+// go backwards, which is how a new game announces itself.
+void SlippiNetplayClient::PeppyRecord(const u8 *data, size_t len)
+{
+	if (len < 5 || data[0] != NP_MSG_SLIPPI_PAD)
+		return;
+
+	s32 frame = (s32)((data[1] << 24) | (data[2] << 16) | (data[3] << 8) | data[4]);
+
+	std::lock_guard<std::mutex> lk(m_spectators_mutex);
+	if (frame < m_history_last_frame)
+	{
+		m_game_history.clear();
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] New game - history reset");
+	}
+	m_history_last_frame = frame;
+
+	// A runaway buffer would be worse than a watcher missing the start.
+	if (m_game_history.size() < 40000)
+		m_game_history.push_back(std::string((const char *)data, len));
+}
+
+void SlippiNetplayClient::PeppyForward(const u8 *data, size_t len)
+{
+	std::lock_guard<std::mutex> lk(m_spectators_mutex);
+	for (auto *spec : m_spectators)
+	{
+		ENetPacket *copy = enet_packet_create(data, len, ENET_PACKET_FLAG_UNSEQUENCED);
+		enet_peer_send(spec, 1, copy);
+	}
+}
+
 void SlippiNetplayClient::Send(sf::Packet &packet)
 {
 	enet_uint32 flags = ENET_PACKET_FLAG_RELIABLE;
@@ -728,13 +778,14 @@ void SlippiNetplayClient::Send(sf::Packet &packet)
 	MessageId outMid = ((u8 *)packet.getData())[0];
 	if (outMid == NP_MSG_SLIPPI_PAD)
 	{
+		PeppyRecord((const u8 *)packet.getData(), packet.getDataSize());
+		PeppyForward((const u8 *)packet.getData(), packet.getDataSize());
+	}
+	else if (outMid == NP_MSG_SLIPPI_MATCH_SELECTIONS)
+	{
+		// What started this game. A watcher needs it before it can start one.
 		std::lock_guard<std::mutex> lk(m_spectators_mutex);
-		for (auto *spec : m_spectators)
-		{
-			ENetPacket *copy =
-			    enet_packet_create(packet.getData(), packet.getDataSize(), ENET_PACKET_FLAG_UNSEQUENCED);
-			enet_peer_send(spec, 1, copy);
-		}
+		m_match_selections.assign((const char *)packet.getData(), packet.getDataSize());
 	}
 }
 
@@ -1085,6 +1136,15 @@ void SlippiNetplayClient::ThreadFunc()
 			{
 			case ENET_EVENT_TYPE_RECEIVE:
 			{
+				// Peppy: the opponent's inputs are half the match. Recording and
+				// relaying them here is what lets a watcher attach to either
+				// player and still see both sides.
+				if (netEvent.packet->dataLength >= 5 && netEvent.packet->data[0] == NP_MSG_SLIPPI_PAD)
+				{
+					PeppyRecord(netEvent.packet->data, netEvent.packet->dataLength);
+					PeppyForward(netEvent.packet->data, netEvent.packet->dataLength);
+				}
+
 				rpac.append(netEvent.packet->data, netEvent.packet->dataLength);
 				OnData(rpac, netEvent.peer);
 				enet_packet_destroy(netEvent.packet);
