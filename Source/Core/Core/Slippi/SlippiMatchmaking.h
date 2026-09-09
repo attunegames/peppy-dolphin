@@ -83,6 +83,12 @@ class SlippiMatchmaking
 	};
 
 	void FindMatch(MatchSearchSettings settings);
+
+	// Peppy: report the winner of a finished game to the room, and answer
+	// whether the room wants these two to break up so somebody waiting can play.
+	// Runs on its own thread - never block the EXI path on the network.
+	void PeppyReportResult(const std::string &matchId, bool iWon);
+	bool PeppyShouldRotate();
 	void MatchmakeThread();
 	ProcessState GetMatchmakeState();
 	bool IsSearching();
