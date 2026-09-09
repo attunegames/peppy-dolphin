@@ -4,7 +4,9 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Core/NetPlayProto.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -778,6 +780,107 @@ void SlippiMatchmaking::startMatchmaking()
 	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Request ticket success");
 }
 
+// ------------------------------------------------------------- the watcher ---
+//
+// Attaches to a match in progress as a read-only peer. It connects, receives the
+// same input packets the players send each other, and sends nothing back.
+//
+// The players never wait on it: on their side spectators live outside m_server,
+// which is what every part of the match iterates. This end is deliberately dumb
+// - it reports what arrives and whether the stream has holes in it, because that
+// is the question worth answering before anything tries to draw a picture.
+namespace
+{
+std::atomic<bool> s_watching(false);
+
+void PeppyWatch(std::string endpoint)
+{
+	auto colon = endpoint.find(':');
+	if (colon == std::string::npos)
+	{
+		s_watching = false;
+		return;
+	}
+	std::string host = endpoint.substr(0, colon);
+	u16 port = (u16)atoi(endpoint.substr(colon + 1).c_str());
+
+	ENetHost *client = enet_host_create(nullptr, 1, 3, 0, 0);
+	if (!client)
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Watcher could not create host");
+		s_watching = false;
+		return;
+	}
+
+	ENetAddress addr;
+	enet_address_set_host(&addr, host.c_str());
+	addr.port = port;
+	ENetPeer *peer = enet_host_connect(client, &addr, 3, 0);
+	if (!peer)
+	{
+		enet_host_destroy(client);
+		s_watching = false;
+		return;
+	}
+
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching %s", endpoint.c_str());
+
+	s32 lastFrame = -1;
+	int gaps = 0, packets = 0;
+	u64 lastReport = Common::Timer::GetTimeMs();
+
+	while (s_watching)
+	{
+		ENetEvent ev;
+		if (enet_host_service(client, &ev, 250) <= 0)
+			continue;
+
+		if (ev.type == ENET_EVENT_TYPE_CONNECT)
+		{
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher connected to %s", endpoint.c_str());
+			continue;
+		}
+		if (ev.type == ENET_EVENT_TYPE_DISCONNECT)
+		{
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher disconnected");
+			break;
+		}
+		if (ev.type != ENET_EVENT_TYPE_RECEIVE)
+			continue;
+
+		// Pad packets lead with the message id, then the frame as a big-endian
+		// s32. We only need the frame number to answer "is this stream whole".
+		if (ev.packet->dataLength >= 5 && ev.packet->data[0] == NP_MSG_SLIPPI_PAD)
+		{
+			const u8 *d = ev.packet->data;
+			s32 frame = (s32)((d[1] << 24) | (d[2] << 16) | (d[3] << 8) | d[4]);
+			packets++;
+			if (lastFrame >= 0 && frame > lastFrame + 1)
+				gaps++;
+			if (frame > lastFrame)
+				lastFrame = frame;
+
+			u64 now = Common::Timer::GetTimeMs();
+			if (now - lastReport > 1000)
+			{
+				lastReport = now;
+				std::stringstream out;
+				out << "WATCHING - frame " << lastFrame << "
+" << packets << " packets, " << gaps << " gaps";
+				OSD::AddTypedMessage(OSD::MessageType::PeppyWatch, out.str(), 4000, OSD::Color::GREEN);
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching: frame %d, %d packets, %d gaps", lastFrame, packets, gaps);
+			}
+		}
+		enet_packet_destroy(ev.packet);
+	}
+
+	enet_peer_disconnect(peer, 0);
+	enet_host_destroy(client);
+	s_watching = false;
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher stopped after %d packets, %d gaps", packets, gaps);
+}
+} // namespace
+
 // The matchmake thread has no pacing of its own - the Slippi path is paced by a
 // blocking receive. Ours polls HTTP, so it has to wait deliberately.
 void SlippiMatchmaking::peppySleep()
@@ -822,6 +925,21 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 
 	if (state == "waiting")
 	{
+		// Queued behind a match in progress: attach to it as a read-only peer.
+		// Prefer the LAN address when we share a public IP with them, exactly as
+		// the players do with each other.
+		auto watch = resp.find("watch");
+		if (!s_watching && watch != resp.end() && watch->is_array() && watch->size() > 0)
+		{
+			std::string target = (*watch)[0].value("lan", "");
+			if (target.empty())
+				target = (*watch)[0].value("external", "");
+			if (!target.empty())
+			{
+				s_watching = true;
+				std::thread(PeppyWatch, target).detach();
+			}
+		}
 		peppySleep();
 		return;
 	}

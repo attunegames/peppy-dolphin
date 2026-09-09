@@ -36,6 +36,7 @@ enum class MessageType
 	// Peppy's room panel. Typed so each update replaces the last one instead of
 	// stacking - it is a live panel, not a stream of notifications.
 	PeppyRoom,
+	PeppyWatch,
 
 	// This entry must be kept last so that persistent typed messages are
 	// displayed before other messages

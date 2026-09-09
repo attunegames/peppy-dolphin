@@ -229,6 +229,16 @@ class SlippiNetplayClient
 
 	ENetHost *m_client = nullptr;
 	std::vector<ENetPeer *> m_server;
+
+	// Peppy: read-only watchers.
+	//
+	// Deliberately NOT in m_server. Everything that governs the match - frame
+	// advancement, ack accounting, disconnect handling, QoS - iterates m_server,
+	// so keeping spectators out of it is what guarantees the match can never
+	// wait on, stall for, or be affected by anyone watching. They are sent
+	// copies of the input packets and are otherwise invisible.
+	std::vector<ENetPeer *> m_spectators;
+	std::mutex m_spectators_mutex;
 	std::thread m_thread;
 	u8 m_remotePlayerCount = 0;
 
