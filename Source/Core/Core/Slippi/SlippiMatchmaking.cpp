@@ -901,6 +901,69 @@ struct PeppyTimeline
 };
 
 PeppyTimeline s_timeline;
+
+// What started the match. Two of these arrive, one per player.
+struct PeppySelections
+{
+	std::mutex m;
+	bool have[4] = {};
+	u8 character[4] = {};
+	u8 colour[4] = {};
+	u16 stage = 0;
+	u32 rngOffset = 0;
+
+	// Laid out by WriteSelectionsToPacket: characterId, characterColor,
+	// isCharacterSelected, playerIdx, stageId, isStageSelected, rngOffset...
+	void Add(const u8 *d, size_t len)
+	{
+		if (len < 12)
+			return;
+		u8 idx = d[4];
+		if (idx >= 4)
+			return;
+
+		std::lock_guard<std::mutex> lk(m);
+		character[idx] = d[1];
+		colour[idx] = d[2];
+		have[idx] = d[3] != 0;
+		u16 st = (u16)((d[5] << 8) | d[6]);
+		if (st != 0)
+			stage = st;
+		if (len >= 12)
+			rngOffset = (u32)((d[8] << 24) | (d[9] << 16) | (d[10] << 8) | d[11]);
+	}
+
+	void Reset()
+	{
+		std::lock_guard<std::mutex> lk(m);
+		for (int i = 0; i < 4; i++)
+			have[i] = false;
+		stage = 0;
+	}
+
+	int Count()
+	{
+		std::lock_guard<std::mutex> lk(m);
+		int n = 0;
+		for (bool b : have)
+			if (b)
+				n++;
+		return n;
+	}
+
+	std::string Describe()
+	{
+		std::lock_guard<std::mutex> lk(m);
+		std::stringstream out;
+		for (int i = 0; i < 4; i++)
+			if (have[i])
+				out << "p" << (int)i << "=char" << (int)character[i] << "/c" << (int)colour[i] << " ";
+		out << "stage " << stage;
+		return out.str();
+	}
+};
+
+PeppySelections s_selections;
 } // namespace
 
 // ------------------------------------------------------------- the watcher ---
@@ -947,6 +1010,7 @@ void PeppyWatch(std::string endpoint)
 	}
 
 	s_timeline.Reset();
+	s_selections.Reset();
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching %s", endpoint.c_str());
 
 	s32 lastFrame = -1;
@@ -1001,9 +1065,11 @@ void PeppyWatch(std::string endpoint)
 
 		if (ev.packet->dataLength >= 1 && d[0] == NP_MSG_SLIPPI_MATCH_SELECTIONS)
 		{
+			s_selections.Add(d, ev.packet->dataLength);
 			gotSelections = true;
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher received match selections (%d bytes)",
 			         (int)ev.packet->dataLength);
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Match so far: %s", s_selections.Describe().c_str());
 		}
 
 		// Pad packets lead with the message id, then the frame as a big-endian

@@ -207,10 +207,12 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 			// Catch them up: the selections that started the game, then every
 			// input packet since. Reliable, because a hole here is not something
 			// a later packet can repair - this IS the backlog.
-			if (!m_match_selections.empty())
+			for (const auto *sel_src : {&m_match_selections, &m_remote_selections})
 			{
-				ENetPacket *sel = enet_packet_create(m_match_selections.data(), m_match_selections.size(),
-				                                     ENET_PACKET_FLAG_RELIABLE);
+				if (sel_src->empty())
+					continue;
+				ENetPacket *sel =
+				    enet_packet_create(sel_src->data(), sel_src->size(), ENET_PACKET_FLAG_RELIABLE);
 				enet_peer_send(peer, 0, sel);
 			}
 			for (const auto &pkt : m_game_history)
@@ -1149,6 +1151,18 @@ void SlippiNetplayClient::ThreadFunc()
 				if (netEvent.packet->dataLength >= 5 && netEvent.packet->data[0] == NP_MSG_SLIPPI_PAD)
 				{
 					PeppyRecord(netEvent.packet->data, netEvent.packet->dataLength);
+					PeppyForward(netEvent.packet->data, netEvent.packet->dataLength);
+				}
+				else if (netEvent.packet->dataLength >= 2 &&
+				         netEvent.packet->data[0] == NP_MSG_SLIPPI_MATCH_SELECTIONS)
+				{
+					// The opponent's character and colour. A watcher needs both
+					// players' selections to start the same match, and each player
+					// only ever sends its own.
+					{
+						std::lock_guard<std::mutex> lk(m_spectators_mutex);
+						m_remote_selections.assign((const char *)netEvent.packet->data, netEvent.packet->dataLength);
+					}
 					PeppyForward(netEvent.packet->data, netEvent.packet->dataLength);
 				}
 
