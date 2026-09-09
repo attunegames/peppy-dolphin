@@ -34,6 +34,14 @@ class MmMessageType
 	static std::string GET_TICKET_RESP;
 };
 
+// Peppy: set while this client is in a match, so its presence keeps being
+// refreshed after the matchmake thread has exited. Declared up here because the
+// destructor clears it.
+namespace
+{
+std::atomic<bool> s_heartbeat(false);
+}
+
 std::string MmMessageType::CREATE_TICKET = "create-ticket";
 std::string MmMessageType::CREATE_TICKET_RESP = "create-ticket-resp";
 std::string MmMessageType::GET_TICKET_RESP = "get-ticket-resp";
@@ -932,8 +940,6 @@ void PeppyWatch(std::string endpoint)
 // the rest.
 namespace
 {
-std::atomic<bool> s_heartbeat(false);
-
 void PeppyHeartbeat()
 {
 	while (s_heartbeat)
