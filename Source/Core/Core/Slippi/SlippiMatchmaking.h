@@ -29,6 +29,9 @@ class SlippiMatchmaking
 		DIRECT = 2,
 		TEAMS = 3,
 		PARTY = 4,
+		// Peppy: added, not replacing. Melee's online submenu has a ninth option
+		// that sets this mode, and it is the only one we intercept.
+		ROOMS = 5,
 	};
 
 	enum ProcessState

@@ -4,11 +4,13 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "VideoCommon/OnScreenDisplay.h"
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <curl/curl.h>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -439,6 +441,43 @@ std::string PeppyIpOf(const std::string &endpoint)
 	auto colon = endpoint.find(':');
 	return colon == std::string::npos ? endpoint : endpoint.substr(0, colon);
 }
+
+// The room panel. Drawn by Dolphin over the game rather than by Melee, because a
+// native screen means artwork and assembly - this is readable today and costs
+// nothing that a native version would have to undo later.
+//
+// Typed, so each update replaces the last instead of stacking up.
+void PeppyShowRoom(const json &resp)
+{
+	std::stringstream out;
+	out << "ROOM " << resp.value("room", "?");
+
+	auto active = resp.find("active");
+	if (active != resp.end() && active->is_array() && active->size() >= 2)
+		out << " - playing: " << (*active)[0].value("name", "?") << " vs " << (*active)[1].value("name", "?");
+	else
+		out << " - no match yet";
+
+	auto queue = resp.find("queue");
+	size_t waiting = (queue != resp.end() && queue->is_array()) ? queue->size() : 0;
+
+	if (resp.value("role", "") == "queued")
+	{
+		int pos = resp.value("position", 0);
+		out << "\nqueue: ";
+		if (pos <= 1)
+			out << "you are next";
+		else
+			out << "you are #" << pos;
+		out << " (" << waiting << (waiting == 1 ? " waiting)" : " waiting)");
+	}
+	else if (waiting > 0)
+	{
+		out << "\nqueue: " << waiting << (waiting == 1 ? " waiting" : " waiting");
+	}
+
+	OSD::AddTypedMessage(OSD::MessageType::PeppyRoom, out.str(), 4000, OSD::Color::CYAN);
+}
 } // namespace
 
 // Fallback: arbitrarily choose the last available local IP address listed. They seem to be listed in decreasing order
@@ -582,7 +621,7 @@ void SlippiMatchmaking::startMatchmaking()
 	// we needed from this step - no connection to Slippi's server is made, and
 	// the hole gets punched by a STUN request from that same socket once there
 	// is actually somebody to play.
-	if (PeppyCfg().ok)
+	if (PeppyCfg().ok && m_searchSettings.mode == OnlinePlayMode::ROOMS)
 	{
 		if (!PeppySignIn())
 		{
@@ -777,6 +816,8 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 		return;
 	}
 
+	PeppyShowRoom(resp);
+
 	std::string state = resp.value("state", "");
 
 	if (state == "waiting")
@@ -896,7 +937,7 @@ void SlippiMatchmaking::handleMatchmaking()
 	if (m_state != ProcessState::MATCHMAKING)
 		return;
 
-	if (PeppyCfg().ok)
+	if (PeppyCfg().ok && m_searchSettings.mode == OnlinePlayMode::ROOMS)
 	{
 		handlePeppyMatchmaking();
 		return;
