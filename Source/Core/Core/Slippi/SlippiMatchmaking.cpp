@@ -837,7 +837,14 @@ void PeppyWatch(std::string endpoint)
 
 		if (ev.type == ENET_EVENT_TYPE_CONNECT)
 		{
-			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher connected to %s", endpoint.c_str());
+			// Announce ourselves. The player cannot tell a watcher from a peer by
+			// address - several clients on one machine share a host, and players'
+			// ports legitimately change - so we say so, and keep saying so until
+			// input starts arriving, in case the first one is lost.
+			u8 hello = NP_MSG_PEPPY_WATCH;
+			ENetPacket *pk = enet_packet_create(&hello, 1, ENET_PACKET_FLAG_RELIABLE);
+			enet_peer_send(ev.peer, 0, pk);
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher connected to %s, announcing", endpoint.c_str());
 			continue;
 		}
 		if (ev.type == ENET_EVENT_TYPE_DISCONNECT)
@@ -846,7 +853,15 @@ void PeppyWatch(std::string endpoint)
 			break;
 		}
 		if (ev.type != ENET_EVENT_TYPE_RECEIVE)
+		{
+			if (packets == 0 && peer->state == ENET_PEER_STATE_CONNECTED)
+			{
+				u8 hello = NP_MSG_PEPPY_WATCH;
+				ENetPacket *pk = enet_packet_create(&hello, 1, ENET_PACKET_FLAG_RELIABLE);
+				enet_peer_send(peer, 0, pk);
+			}
 			continue;
+		}
 
 		// Pad packets lead with the message id, then the frame as a big-endian
 		// s32. We only need the frame number to answer "is this stream whole".

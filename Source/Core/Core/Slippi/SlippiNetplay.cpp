@@ -191,6 +191,21 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 
 	switch (mid)
 	{
+	case NP_MSG_PEPPY_WATCH:
+	{
+		std::lock_guard<std::mutex> lk(m_spectators_mutex);
+		bool known = false;
+		for (auto *s : m_spectators)
+			if (s == peer)
+				known = true;
+		if (!known)
+		{
+			m_spectators.push_back(peer);
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Spectator attached from %x:%d (%d watching)", peer->address.host,
+			         peer->address.port, (int)m_spectators.size());
+		}
+		break;
+	}
 	case NP_MSG_SLIPPI_PAD:
 	{
 		// Fetch current time immediately for the most accurate timing calculations
@@ -1139,29 +1154,6 @@ void SlippiNetplayClient::ThreadFunc()
 			{
 				std::stringstream keyStrm;
 				keyStrm << netEvent.peer->address.host << "-" << netEvent.peer->address.port;
-
-				// Peppy: is this one of the players, or someone watching?
-				//
-				// Without this check an unknown peer fell through with
-				// lateConnRemoteIdx still 0 and got registered as player 0 -
-				// marking a real player active off a stranger's connection.
-				bool isKnownPlayer = false;
-				for (int i = 0; i < (int)m_server.size(); i++)
-				{
-					if (m_server[i]->address.host == netEvent.peer->address.host)
-					{
-						isKnownPlayer = true;
-						break;
-					}
-				}
-				if (!isKnownPlayer)
-				{
-					std::lock_guard<std::mutex> lk(m_spectators_mutex);
-					m_spectators.push_back(netEvent.peer);
-					WARN_LOG(SLIPPI_ONLINE, "[Peppy] Spectator attached from %x:%d (%d watching)",
-					         netEvent.peer->address.host, netEvent.peer->address.port, (int)m_spectators.size());
-					break;
-				}
 
 				int lateConnRemoteIdx = 0;
 				for (int i = 0; i < (int)m_server.size(); i++)
