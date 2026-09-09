@@ -700,6 +700,27 @@ void SlippiNetplayClient::Send(sf::Packet &packet)
 		ENetPacket *epac = enet_packet_create(packet.getData(), packet.getDataSize(), flags);
 		int sendResult = enet_peer_send(m_server[i], channelId, epac);
 	}
+
+	// Peppy: hand the same inputs to anyone watching.
+	//
+	// A copy of what the players already send each other, including the
+	// unacknowledged backlog every pad packet carries - which is why a watcher
+	// recovers from packet loss the same way a player does, and why watching
+	// cannot stutter the way rebuilding a file from a lossy relay did.
+	//
+	// Nothing here is acknowledged and nothing is waited on. If a watcher is
+	// slow, gone, or never existed, the match does not notice.
+	MessageId outMid = ((u8 *)packet.getData())[0];
+	if (outMid == NP_MSG_SLIPPI_PAD)
+	{
+		std::lock_guard<std::mutex> lk(m_spectators_mutex);
+		for (auto *spec : m_spectators)
+		{
+			ENetPacket *copy =
+			    enet_packet_create(packet.getData(), packet.getDataSize(), ENET_PACKET_FLAG_UNSEQUENCED);
+			enet_peer_send(spec, 1, copy);
+		}
+	}
 }
 
 void SlippiNetplayClient::Disconnect()
@@ -1118,6 +1139,30 @@ void SlippiNetplayClient::ThreadFunc()
 			{
 				std::stringstream keyStrm;
 				keyStrm << netEvent.peer->address.host << "-" << netEvent.peer->address.port;
+
+				// Peppy: is this one of the players, or someone watching?
+				//
+				// Without this check an unknown peer fell through with
+				// lateConnRemoteIdx still 0 and got registered as player 0 -
+				// marking a real player active off a stranger's connection.
+				bool isKnownPlayer = false;
+				for (int i = 0; i < (int)m_server.size(); i++)
+				{
+					if (m_server[i]->address.host == netEvent.peer->address.host)
+					{
+						isKnownPlayer = true;
+						break;
+					}
+				}
+				if (!isKnownPlayer)
+				{
+					std::lock_guard<std::mutex> lk(m_spectators_mutex);
+					m_spectators.push_back(netEvent.peer);
+					WARN_LOG(SLIPPI_ONLINE, "[Peppy] Spectator attached from %x:%d (%d watching)",
+					         netEvent.peer->address.host, netEvent.peer->address.port, (int)m_spectators.size());
+					break;
+				}
+
 				int lateConnRemoteIdx = 0;
 				for (int i = 0; i < (int)m_server.size(); i++)
 				{
