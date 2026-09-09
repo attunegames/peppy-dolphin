@@ -469,7 +469,13 @@ void PeppyShowRoom(const json &resp)
 
 	auto active = resp.find("active");
 	if (active != resp.end() && active->is_array() && active->size() >= 2)
-		out << " - playing: " << (*active)[0].value("name", "?") << " vs " << (*active)[1].value("name", "?");
+	{
+		// A pairing exists well before the two players have connected - the room
+		// arranges it the moment they are both free. Only "ready" means a game is
+		// actually being played.
+		out << (resp.value("live", false) ? " - playing: " : " - next up: ") << (*active)[0].value("name", "?")
+		    << " vs " << (*active)[1].value("name", "?");
+	}
 	else
 		out << " - no match yet";
 
@@ -955,6 +961,10 @@ void PeppyHeartbeat()
 		body["p_room"] = PeppyCfg().room;
 		body["p_name"] = PeppyCfg().name;
 		body["p_code"] = PeppyCfg().code;
+		// Presence only. pd_tick also pairs people, and a heartbeat arranging
+		// matches is how the loser kept re-pairing with the winner the instant a
+		// game ended, skipping whoever was actually next in the queue.
+		body["p_presence_only"] = true;
 		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 		for (int i = 0; i < 20 && s_heartbeat; i++)
 			std::this_thread::sleep_for(std::chrono::milliseconds(500));
