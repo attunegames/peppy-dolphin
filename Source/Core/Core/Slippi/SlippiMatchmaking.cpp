@@ -865,8 +865,8 @@ void PeppyWatch(std::string endpoint)
 			{
 				lastReport = now;
 				std::stringstream out;
-				out << "WATCHING - frame " << lastFrame << "
-" << packets << " packets, " << gaps << " gaps";
+				out << "WATCHING - frame " << lastFrame << "\n"
+				    << packets << " packets, " << gaps << " gaps";
 				OSD::AddTypedMessage(OSD::MessageType::PeppyWatch, out.str(), 4000, OSD::Color::GREEN);
 				WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching: frame %d, %d packets, %d gaps", lastFrame, packets, gaps);
 			}
