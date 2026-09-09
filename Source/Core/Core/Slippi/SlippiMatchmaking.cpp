@@ -6,12 +6,14 @@
 #include "Common/StringUtil.h"
 #include "Core/NetPlayProto.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <curl/curl.h>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -802,6 +804,105 @@ void SlippiMatchmaking::startMatchmaking()
 	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Request ticket success");
 }
 
+// --------------------------------------------------------- input timeline ---
+//
+// Turns the packet stream into what a simulation actually needs: for every
+// frame, what each player pressed.
+//
+// Each pad packet leads with a frame number and then carries that frame's inputs
+// followed by the unacknowledged backlog behind it - so a packet for frame 4000
+// also contains 3999, 3998 and so on. That redundancy is why the stream survives
+// packet loss, and it is also what lets a watcher joining late rebuild the whole
+// match from the burst of history it is sent.
+namespace
+{
+constexpr int PEPPY_PAD_OFFSET = 14; // mid(1) + frame(4) + playerIdx(1) + checksum(8)
+constexpr int PEPPY_PAD_STRIDE = 8;  // SLIPPI_PAD_DATA_SIZE
+
+struct PeppyTimeline
+{
+	std::mutex m;
+	std::map<s32, std::array<std::array<u8, PEPPY_PAD_STRIDE>, 4>> frames;
+	std::array<bool, 4> seen{};
+	s32 low = 0, high = 0;
+	bool any = false;
+
+	void Add(const u8 *d, size_t len)
+	{
+		if (len < PEPPY_PAD_OFFSET + PEPPY_PAD_STRIDE)
+			return;
+
+		s32 frame = (s32)((d[1] << 24) | (d[2] << 16) | (d[3] << 8) | d[4]);
+		u8 idx = d[5];
+		if (idx >= 4)
+			return;
+
+		int pads = (int)((len - PEPPY_PAD_OFFSET) / PEPPY_PAD_STRIDE);
+
+		std::lock_guard<std::mutex> lk(m);
+		seen[idx] = true;
+		for (int i = 0; i < pads; i++)
+		{
+			s32 f = frame - i; // the queue runs newest first
+			auto &slot = frames[f][idx];
+			memcpy(slot.data(), d + PEPPY_PAD_OFFSET + i * PEPPY_PAD_STRIDE, PEPPY_PAD_STRIDE);
+		}
+		if (!any)
+		{
+			low = high = frame;
+			any = true;
+		}
+		if (frame < low)
+			low = frame;
+		if (frame > high)
+			high = frame;
+	}
+
+	void Reset()
+	{
+		std::lock_guard<std::mutex> lk(m);
+		frames.clear();
+		seen.fill(false);
+		any = false;
+	}
+
+	// How complete is it? A simulation cannot skip a frame, so the only number
+	// that matters is whether any frame in range is missing a player.
+	std::string Describe()
+	{
+		std::lock_guard<std::mutex> lk(m);
+		if (!any)
+			return "no frames yet";
+
+		int players = 0;
+		for (bool b : seen)
+			if (b)
+				players++;
+
+		int missing = 0;
+		for (s32 f = low; f <= high; f++)
+		{
+			auto it = frames.find(f);
+			if (it == frames.end())
+			{
+				missing++;
+				continue;
+			}
+			for (int i = 0; i < 4; i++)
+				if (seen[i] && it->second[i] == std::array<u8, PEPPY_PAD_STRIDE>{})
+					missing++;
+		}
+
+		std::stringstream out;
+		out << "frames " << low << ".." << high << " (" << (high - low + 1) << "), " << players << " players, "
+		    << missing << " missing";
+		return out.str();
+	}
+};
+
+PeppyTimeline s_timeline;
+} // namespace
+
 // ------------------------------------------------------------- the watcher ---
 //
 // Attaches to a match in progress as a read-only peer. It connects, receives the
@@ -845,6 +946,7 @@ void PeppyWatch(std::string endpoint)
 		return;
 	}
 
+	s_timeline.Reset();
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching %s", endpoint.c_str());
 
 	s32 lastFrame = -1;
@@ -912,6 +1014,11 @@ void PeppyWatch(std::string endpoint)
 			s32 frame = (s32)((d[1] << 24) | (d[2] << 16) | (d[3] << 8) | d[4]);
 			packets++;
 
+			// Assemble it into a per-frame timeline. This is the thing a
+			// simulation would consume; counting packets only ever told us the
+			// pipe was healthy.
+			s_timeline.Add(d, ev.packet->dataLength);
+
 			// The catch-up burst arrives far faster than a game is played. Once
 			// packets stop outrunning the clock, we are live.
 			u64 now = Common::Timer::GetTimeMs();
@@ -929,9 +1036,9 @@ void PeppyWatch(std::string endpoint)
 				    << packets << " packets, " << gaps << " gaps"
 				    << (gotSelections ? ", have match info" : ", NO match info");
 				OSD::AddTypedMessage(OSD::MessageType::PeppyWatch, out.str(), 4000, OSD::Color::GREEN);
-				WARN_LOG(SLIPPI_ONLINE, "[Peppy] %s frame %d, %d packets, %d gaps, selections %s",
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] %s frame %d, %d packets, %d gaps, selections %s | timeline: %s",
 				         catchingUp ? "Catching up:" : "Watching:", lastFrame, packets, gaps,
-				         gotSelections ? "yes" : "no");
+				         gotSelections ? "yes" : "no", s_timeline.Describe().c_str());
 			}
 		}
 		enet_packet_destroy(ev.packet);
