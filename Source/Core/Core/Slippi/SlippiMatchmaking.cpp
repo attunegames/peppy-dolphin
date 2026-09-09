@@ -57,6 +57,7 @@ SlippiMatchmaking::SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *us
 SlippiMatchmaking::~SlippiMatchmaking()
 {
 	isMmTerminated = true;
+	s_heartbeat = false;
 	m_state = ProcessState::ERROR_ENCOUNTERED;
 	m_errorMsg = "Matchmaking shut down";
 
@@ -922,6 +923,32 @@ void PeppyWatch(std::string endpoint)
 }
 } // namespace
 
+// Players stop polling the moment they connect - the matchmake thread exits and
+// nothing refreshes their presence. The room then sweeps them out mid-match and
+// reports no match in progress, which is both wrong on screen and dangerous:
+// the pairing their result will settle against has already been closed.
+//
+// So a heartbeat outlives that thread. It only refreshes presence; the room does
+// the rest.
+namespace
+{
+std::atomic<bool> s_heartbeat(false);
+
+void PeppyHeartbeat()
+{
+	while (s_heartbeat)
+	{
+		json body;
+		body["p_room"] = PeppyCfg().room;
+		body["p_name"] = PeppyCfg().name;
+		body["p_code"] = PeppyCfg().code;
+		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
+		for (int i = 0; i < 20 && s_heartbeat; i++)
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+	}
+}
+} // namespace
+
 // The matchmake thread has no pacing of its own - the Slippi path is paced by a
 // blocking receive. Ours polls HTTP, so it has to wait deliberately.
 void SlippiMatchmaking::peppySleep()
@@ -1086,6 +1113,9 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	// Frees the port so the netplay client can bind it. The NAT mapping we just
 	// opened survives, because routers key them on the port, not the socket.
 	terminateMmConnection();
+
+	if (!s_heartbeat.exchange(true))
+		std::thread(PeppyHeartbeat).detach();
 
 	m_state = ProcessState::OPPONENT_CONNECTING;
 }
