@@ -40,6 +40,7 @@ class MmMessageType
 namespace
 {
 std::atomic<bool> s_heartbeat(false);
+void PeppyHeartbeat(); // defined below, next to the rest of the room polling
 }
 
 std::string MmMessageType::CREATE_TICKET = "create-ticket";
@@ -65,7 +66,10 @@ SlippiMatchmaking::SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *us
 SlippiMatchmaking::~SlippiMatchmaking()
 {
 	isMmTerminated = true;
-	s_heartbeat = false;
+	// The heartbeat deliberately survives this object. It is destroyed when a
+	// match ends, and a player sitting at "press start to search" is still in the
+	// room - stopping here let them be swept out, which cost them their place in
+	// the queue and handed their next opponent to whoever pressed start first.
 	m_state = ProcessState::ERROR_ENCOUNTERED;
 	m_errorMsg = "Matchmaking shut down";
 
@@ -652,6 +656,9 @@ void SlippiMatchmaking::startMatchmaking()
 		reset["p_code"] = PeppyCfg().code;
 		reset["p_reset"] = true;
 		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", reset.dump(), PeppyToken());
+
+		if (!s_heartbeat.exchange(true))
+			std::thread(PeppyHeartbeat).detach();
 
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Joined room '%s' as %s on port %d", PeppyCfg().room.c_str(),
 		         PeppyCfg().code.c_str(), m_hostPort);
