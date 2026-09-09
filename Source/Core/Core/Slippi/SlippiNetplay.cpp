@@ -218,6 +218,13 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 				ENetPacket *hist = enet_packet_create(pkt.data(), pkt.size(), ENET_PACKET_FLAG_RELIABLE);
 				enet_peer_send(peer, 0, hist);
 			}
+
+			// Mark the end of the backlog. The watcher cannot infer this from
+			// timing - once it is live, packets arrive every frame and never
+			// pause - so we say it outright.
+			u8 done = NP_MSG_PEPPY_WATCH;
+			ENetPacket *end = enet_packet_create(&done, 1, ENET_PACKET_FLAG_RELIABLE);
+			enet_peer_send(peer, 0, end);
 		}
 		break;
 	}

@@ -829,7 +829,6 @@ void PeppyWatch(std::string endpoint)
 	int gaps = 0, packets = 0;
 	bool catchingUp = true, gotSelections = false;
 	u64 lastReport = Common::Timer::GetTimeMs();
-	u64 lastArrival = lastReport;
 
 	while (s_watching)
 	{
@@ -869,6 +868,13 @@ void PeppyWatch(std::string endpoint)
 
 		// The selections that started the match - characters, stage, RNG offset.
 		// A watcher needs these before it could ever start a game of its own.
+		// The player marking the end of the backlog. Everything after this is live.
+		if (ev.packet->dataLength >= 1 && d[0] == NP_MSG_PEPPY_WATCH && catchingUp)
+		{
+			catchingUp = false;
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Caught up after %d packets at frame %d - now live", packets, lastFrame);
+		}
+
 		if (ev.packet->dataLength >= 1 && d[0] == NP_MSG_SLIPPI_MATCH_SELECTIONS)
 		{
 			gotSelections = true;
@@ -887,12 +893,6 @@ void PeppyWatch(std::string endpoint)
 			// The catch-up burst arrives far faster than a game is played. Once
 			// packets stop outrunning the clock, we are live.
 			u64 now = Common::Timer::GetTimeMs();
-			if (catchingUp && packets > 1 && now - lastArrival > 500)
-			{
-				catchingUp = false;
-				WARN_LOG(SLIPPI_ONLINE, "[Peppy] Caught up at frame %d after %d packets - now live", frame, packets);
-			}
-			lastArrival = now;
 
 			if (lastFrame >= 0 && frame > lastFrame + 1)
 				gaps++;
