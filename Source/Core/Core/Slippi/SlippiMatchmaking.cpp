@@ -540,6 +540,20 @@ void SlippiMatchmaking::startMatchmaking()
 
 		if (customPort)
 			m_hostPort = SConfig::GetInstance().m_slippiNetplayPort;
+		else if (PeppyCfg().ok)
+		{
+			// The port must not move between attempts. A fresh one on every retry
+			// means both players end up dialling an address the other has already
+			// abandoned - and the router drops those packets, because you never
+			// sent anything to the port they are now on. Two moving targets that
+			// almost never line up: connecting failed over and over on real
+			// networks whose NATs were both perfectly friendly.
+			//
+			// Chosen once per process rather than hardcoded, so two clients on one
+			// machine still get different ports.
+			static const int peppyPort = 41000 + (int)(Common::Timer::GetTimeMs() % 10000);
+			m_hostPort = peppyPort;
+		}
 		else
 			m_hostPort = 41000 + (generator() % 10000);
 		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Port to use: %d...", m_hostPort);
