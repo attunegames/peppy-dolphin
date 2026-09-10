@@ -757,13 +757,17 @@ void SlippiNetplayClient::PeppyRecord(const u8 *data, size_t len)
 		m_game_history.push_back(std::string((const char *)data, len));
 }
 
-void SlippiNetplayClient::PeppyForward(const u8 *data, size_t len)
+// Inputs go out unsequenced, like they do between the players: a dropped pad
+// packet is repaired by the next one, which carries the backlog. Selections are
+// not repairable by anything later, so those go reliably.
+void SlippiNetplayClient::PeppyForward(const u8 *data, size_t len, bool reliable)
 {
 	std::lock_guard<std::mutex> lk(m_spectators_mutex);
 	for (auto *spec : m_spectators)
 	{
-		ENetPacket *copy = enet_packet_create(data, len, ENET_PACKET_FLAG_UNSEQUENCED);
-		enet_peer_send(spec, 1, copy);
+		ENetPacket *copy =
+		    enet_packet_create(data, len, reliable ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED);
+		enet_peer_send(spec, reliable ? 0 : 1, copy);
 	}
 }
 
@@ -813,6 +817,15 @@ void SlippiNetplayClient::Send(sf::Packet &packet)
 	{
 		PeppyRecord((const u8 *)packet.getData(), packet.getDataSize());
 		PeppyForward((const u8 *)packet.getData(), packet.getDataSize());
+	}
+	else if (outMid == NP_MSG_SLIPPI_MATCH_SELECTIONS)
+	{
+		// Our own character, sent live. The opponent's is forwarded where it
+		// arrives. A watcher that is already attached when a new game starts gets
+		// both sides this way; one that attaches later is sent the pair kept at
+		// game start. Before this, only the opponent's ever reached a watcher, so
+		// it had half a match and never began.
+		PeppyForward((const u8 *)packet.getData(), packet.getDataSize(), true);
 	}
 }
 
@@ -1177,7 +1190,7 @@ void SlippiNetplayClient::ThreadFunc()
 					// Forwarded live so a watcher already attached sees the next
 					// game's characters. The catch-up copy is kept at game start
 					// instead, where both players' selections are known at once.
-					PeppyForward(netEvent.packet->data, netEvent.packet->dataLength);
+					PeppyForward(netEvent.packet->data, netEvent.packet->dataLength, true);
 				}
 
 				rpac.append(netEvent.packet->data, netEvent.packet->dataLength);
