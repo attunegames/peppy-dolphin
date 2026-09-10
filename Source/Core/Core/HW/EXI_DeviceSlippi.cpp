@@ -2288,6 +2288,7 @@ void CEXISlippi::prepareOnlineMatchState()
 		// We are back at the character select, which is where a restart is spent:
 		// the previous match has ended and the next one is about to be built.
 		SlippiMatchmaking::PeppyWatchClearRestart();
+		SlippiMatchmaking::PeppyWatchSetMatchLatch(true);
 
 		if (!slippi_netplay)
 		{
@@ -2340,6 +2341,7 @@ void CEXISlippi::prepareOnlineMatchState()
 			slippi_netplay = std::make_unique<SlippiNetplayClient>(true);
 #else
 			slippi_netplay = matchmaking->GetNetplayClient();
+			SlippiMatchmaking::PeppyWatchSetMatchLatch(false); // ours to win or lose
 #endif
 
 			// This happens on the initial connection to a player. The matchmaking object is ephemeral, it
@@ -3314,8 +3316,13 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 	// Whether to actually break up the session is a separate question: we only
 	// do it when somebody is waiting. Two people alone in a room keep playing
 	// each other, which is what anyone would expect.
+	// The latch, not PeppyWatchActive, decides this. A watched game ends when its
+	// stream stops, so by the time Melee tells us the result the watch is already
+	// over and the live flag reads false - which had spectators reporting results
+	// for matches they were not in, against a stale match id from their own last
+	// game. That closes somebody else's pairing and reshuffles the queue.
 	if (matchmaking && query.onlineMode == (u8)SlippiMatchmaking::OnlinePlayMode::ROOMS &&
-	    !SlippiMatchmaking::PeppyWatchActive())
+	    !SlippiMatchmaking::PeppyWatchActive() && !SlippiMatchmaking::PeppyWatchMatchLatched())
 	{
 		bool iWon = winnerIdx == matchmaking->LocalPlayerIndex();
 		matchmaking->PeppyReportResult(matchId, iWon);

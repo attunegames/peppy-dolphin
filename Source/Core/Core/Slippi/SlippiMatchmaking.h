@@ -99,6 +99,8 @@ class SlippiMatchmaking
 	static u8 PeppyWatchColour(u8 idx);
 	static u16 PeppyWatchStage();
 	static u32 PeppyWatchRngOffset(); // the host's, the one the match ran with
+	static void PeppyWatchSetMatchLatch(bool watched); // this match is one we are watching
+	static bool PeppyWatchMatchLatched();
 	static std::string PeppyWatchPadReport(); // what the simulation is being fed
 	static bool PeppyWatchRestartPending(); // the players have started a new game
 	static void PeppyWatchClearRestart();
