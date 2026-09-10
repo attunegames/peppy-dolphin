@@ -11,6 +11,7 @@
 #include "Core/HW/GCPad.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/SI_DeviceGCController.h"
+#include "Core/Slippi/SlippiMatchmaking.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
@@ -114,9 +115,42 @@ int CSIDevice_GCController::RunBuffer(u8* _pBuffer, int _iLength)
 	return _iLength;
 }
 
+
+// Peppy: a spectator is watching a match nobody at this machine is playing, so
+// the controller ports are driven from the received input timeline instead of
+// from hardware. This is the same seam movie playback uses to make the game read
+// inputs that were never pressed.
+//
+// Melee's pad bytes are the GameCube's own button layout, so the buttons need no
+// translation - only the sticks, which are signed on the wire and centred here.
+static bool PeppyFillWatchPad(GCPadStatus *pad, int port)
+{
+	if (!SlippiMatchmaking::PeppyWatchActive() || port != 0)
+		return false;
+
+	s32 frame = SlippiMatchmaking::PeppyWatchFrame();
+	u8 buf[SLIPPI_PAD_FULL_SIZE] = {};
+	if (!SlippiMatchmaking::PeppyWatchPad(frame, 0, buf))
+		return false;
+
+	pad->button = (u16)((buf[0] << 8) | buf[1]);
+	pad->stickX = (u8)(128 + (s8)buf[2]);
+	pad->stickY = (u8)(128 + (s8)buf[3]);
+	pad->substickX = (u8)(128 + (s8)buf[4]);
+	pad->substickY = (u8)(128 + (s8)buf[5]);
+	pad->triggerLeft = buf[6];
+	pad->triggerRight = buf[7];
+	pad->isConnected = true;
+	return true;
+}
+
 void CSIDevice_GCController::HandleMoviePadStatus(GCPadStatus* PadStatus)
 {
 	Movie::CallGCInputManip(PadStatus, ISIDevice::m_iDeviceNumber);
+
+	// Watching takes precedence: there is no local player to read.
+	if (PeppyFillWatchPad(PadStatus, ISIDevice::m_iDeviceNumber))
+		return;
 
 	Movie::SetPolledDevice();
 	if (NetPlay_GetInput(ISIDevice::m_iDeviceNumber, PadStatus))

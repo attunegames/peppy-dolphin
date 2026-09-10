@@ -203,6 +203,10 @@ class SlippiNetplayClient
 
 	// Peppy: record an input packet for late watchers, and hand a copy to the
 	// ones already attached. Both are no-ops when nobody is watching.
+	// Peppy: give a watcher's dummy client the opponent it never connected to,
+	// so the match-start path can treat it like any other game.
+	void PeppySetRemoteSelections(const SlippiPlayerSelections &sel);
+
 	void PeppyRecord(const u8 *data, size_t len);
 	void PeppyForward(const u8 *data, size_t len);
 	SlippiDisconnectReason GetDisconnectReason();
