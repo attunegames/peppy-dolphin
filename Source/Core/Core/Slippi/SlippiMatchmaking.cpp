@@ -1017,6 +1017,12 @@ namespace
 {
 std::atomic<bool> s_watching(false);
 
+// The stream has ended but the watcher is still behind it. Being behind is the
+// normal state - it started late and is chasing - so ending the moment the
+// players finish would cut off however much it had left to show. It keeps
+// playing what it holds and stops when it runs out.
+std::atomic<bool> s_draining(false);
+
 void PeppyWatch(std::string endpoint)
 {
 	auto colon = endpoint.find(':');
@@ -1047,6 +1053,7 @@ void PeppyWatch(std::string endpoint)
 		return;
 	}
 
+	s_draining = false;
 	s_timeline.Reset();
 	s_selections.Reset();
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching %s", endpoint.c_str());
@@ -1150,8 +1157,11 @@ void PeppyWatch(std::string endpoint)
 
 	enet_peer_disconnect(peer, 0);
 	enet_host_destroy(client);
-	s_watching = false;
-	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher stopped after %d packets, %d gaps", packets, gaps);
+	// Not "stop" but "no more is coming" - PeppyWatchSetFrame ends it once the
+	// last frame received has actually been played.
+	s_draining = true;
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher stream ended after %d packets, %d gaps - draining to frame %d", packets,
+	         gaps, lastFrame);
 }
 } // namespace
 
@@ -1485,6 +1495,15 @@ s32 SlippiMatchmaking::PeppyWatchFrame()
 void SlippiMatchmaking::PeppyWatchSetFrame(s32 frame)
 {
 	s_watch_frame.store(frame);
+
+	// Melee drives this every frame, which makes it the natural place to notice
+	// that a finished stream has been played out to its end.
+	if (s_draining.load() && frame >= PeppyWatchLatestFrame())
+	{
+		s_draining = false;
+		s_watching = false;
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch finished at frame %d", frame);
+	}
 }
 
 s32 SlippiMatchmaking::PeppyWatchLatestFrame()
