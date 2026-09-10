@@ -212,23 +212,24 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 			// still be lying around. Relaying stored packets meant a watcher
 			// sometimes got one player's character and never started, depending
 			// on when it arrived.
+			//
+			// These were taken when the game started. Reading the live match info
+			// here does not work: StartSlippiGame clears it, so anyone attaching
+			// after frame 0 - which is everyone - would be told nothing.
 			{
-				SlippiPlayerSelections both[2] = {matchInfo.localPlayerSelections,
-				                                  matchInfo.remotePlayerSelections[0]};
-				both[0].playerIdx = playerIdx;
-				both[1].playerIdx = matchInfo.remotePlayerSelections[0].playerIdx;
-
-				for (auto &sel : both)
+				const std::string *sel[2] = {&m_match_selections, &m_remote_selections};
+				for (int i = 0; i < 2; i++)
 				{
-					if (!sel.isCharacterSelected)
+					if (sel[i]->empty())
+					{
+						WARN_LOG(SLIPPI_ONLINE, "[Peppy] No stored selections for slot %d", i);
 						continue;
-					sf::Packet spac;
-					writeToPacket(spac, sel);
+					}
 					ENetPacket *sp =
-					    enet_packet_create(spac.getData(), spac.getDataSize(), ENET_PACKET_FLAG_RELIABLE);
+					    enet_packet_create(sel[i]->data(), sel[i]->size(), ENET_PACKET_FLAG_RELIABLE);
 					enet_peer_send(peer, 0, sp);
-					WARN_LOG(SLIPPI_ONLINE, "[Peppy] Sent watcher selections for player %d: char %d stage %d",
-					         sel.playerIdx, sel.characterId, sel.stageId);
+					WARN_LOG(SLIPPI_ONLINE, "[Peppy] Sent watcher stored selections for slot %d (%d bytes)", i,
+					         (int)sel[i]->size());
 				}
 			}
 			for (const auto &pkt : m_game_history)
@@ -813,12 +814,6 @@ void SlippiNetplayClient::Send(sf::Packet &packet)
 		PeppyRecord((const u8 *)packet.getData(), packet.getDataSize());
 		PeppyForward((const u8 *)packet.getData(), packet.getDataSize());
 	}
-	else if (outMid == NP_MSG_SLIPPI_MATCH_SELECTIONS)
-	{
-		// What started this game. A watcher needs it before it can start one.
-		std::lock_guard<std::mutex> lk(m_spectators_mutex);
-		m_match_selections.assign((const char *)packet.getData(), packet.getDataSize());
-	}
 }
 
 void SlippiNetplayClient::Disconnect()
@@ -1179,13 +1174,9 @@ void SlippiNetplayClient::ThreadFunc()
 				else if (netEvent.packet->dataLength >= 2 &&
 				         netEvent.packet->data[0] == NP_MSG_SLIPPI_MATCH_SELECTIONS)
 				{
-					// The opponent's character and colour. A watcher needs both
-					// players' selections to start the same match, and each player
-					// only ever sends its own.
-					{
-						std::lock_guard<std::mutex> lk(m_spectators_mutex);
-						m_remote_selections.assign((const char *)netEvent.packet->data, netEvent.packet->dataLength);
-					}
+					// Forwarded live so a watcher already attached sees the next
+					// game's characters. The catch-up copy is kept at game start
+					// instead, where both players' selections are known at once.
 					PeppyForward(netEvent.packet->data, netEvent.packet->dataLength);
 				}
 
@@ -1344,6 +1335,38 @@ void SlippiNetplayClient::StartSlippiGame()
 
 	// Clear game prep queue in case anything is still lingering
 	gamePrepStepQueue.clear();
+
+	// Peppy: keep what this game is starting with, because the reset below erases
+	// it.
+	//
+	// A watcher nearly always attaches after the match is underway - that is what
+	// the catch-up buffer is for - and by then the live selections are gone, so
+	// asking for them at that point returns nothing and the watcher never starts
+	// a match. Build the packets here instead, from the state the game is
+	// actually beginning with, and hand them to whoever turns up later.
+	{
+		SlippiPlayerSelections snapshot[2] = {matchInfo.localPlayerSelections, matchInfo.remotePlayerSelections[0]};
+		snapshot[0].playerIdx = playerIdx;
+		snapshot[1].playerIdx = matchInfo.remotePlayerSelections[0].playerIdx;
+
+		std::string *dest[2] = {&m_match_selections, &m_remote_selections};
+
+		std::lock_guard<std::mutex> lk(m_spectators_mutex);
+		for (int i = 0; i < 2; i++)
+		{
+			dest[i]->clear();
+			if (!snapshot[i].isCharacterSelected)
+			{
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] Game start: no selection for slot %d - watchers will be short one", i);
+				continue;
+			}
+			sf::Packet spac;
+			writeToPacket(spac, snapshot[i]);
+			dest[i]->assign((const char *)spac.getData(), spac.getDataSize());
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Game start: kept player %d char %d stage %d for watchers",
+			         snapshot[i].playerIdx, snapshot[i].characterId, snapshot[i].stageId);
+		}
+	}
 
 	// Reset match info for next game
 	matchInfo.Reset();

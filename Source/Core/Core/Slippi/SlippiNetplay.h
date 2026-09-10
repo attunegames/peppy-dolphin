@@ -258,7 +258,10 @@ class SlippiNetplayClient
 	// 1v1 is well under a megabyte. A watcher joining late is handed all of it at
 	// once, runs it as fast as the emulator will go, and comes out live.
 	std::vector<std::string> m_game_history;
-	std::string m_match_selections; // ours
+	// The two selection packets this game started with, snapshotted in
+	// StartSlippiGame. They have to be kept rather than read live, because the
+	// live copy is cleared the moment the game begins.
+	std::string m_match_selections;  // ours
 	std::string m_remote_selections; // the opponent's
 	s32 m_history_last_frame = -1;
 	std::thread m_thread;
