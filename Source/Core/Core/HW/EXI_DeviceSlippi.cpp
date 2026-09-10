@@ -1237,8 +1237,11 @@ bool CEXISlippi::isDisconnected()
 	// is already in hand. Judging it by connection status ended the game on the
 	// first frame, because the stand-in client is constructed "failed": the
 	// characters and stage loaded correctly and then it immediately quit.
+	//
+	// The one thing that does end a watcher's match is the players starting a
+	// new one, which is what this flag means.
 	if (SlippiMatchmaking::PeppyWatchActive())
-		return false;
+		return SlippiMatchmaking::PeppyWatchRestartPending();
 
 	auto status = slippi_netplay->GetSlippiConnectStatus();
 	return status != SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED;
@@ -2270,6 +2273,10 @@ void CEXISlippi::prepareOnlineMatchState()
 	// too - then everything downstream runs unchanged.
 	if (SlippiMatchmaking::PeppyWatchActive() && SlippiMatchmaking::PeppyWatchReady())
 	{
+		// We are back at the character select, which is where a restart is spent:
+		// the previous match has ended and the next one is about to be built.
+		SlippiMatchmaking::PeppyWatchClearRestart();
+
 		if (!slippi_netplay)
 		{
 			slippi_netplay = std::make_unique<SlippiNetplayClient>(true);
