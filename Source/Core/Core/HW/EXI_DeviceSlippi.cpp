@@ -1553,20 +1553,21 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	return false;
 }
 
-// Peppy: Slippi already solves this problem for itself. Mirror mode watches a
-// live game through a replay stream, falls behind, and overclocks the emulated
-// CPU to catch up - SlippiPlaybackStatus::setHardFFW, 4x. A watcher has exactly
-// that problem, so it pulls exactly that lever: the frame-advance signal on its
-// own tops out at double speed, which will not close a minute in any reasonable
-// time.
-// Sound is muted along with it. An overclocked game plays its audio at the same
-// multiple, and four times speed Melee does not read as "catching up", it reads
-// as broken. The player's own mute setting is put back afterwards, not assumed.
+// Peppy: catching up means running the emulator faster than real time, which is
+// Dolphin's own fast-forward - the throttler is simply switched off. Nothing is
+// waiting on a watcher, so nothing is harmed by it running flat out.
+//
+// The overclock this used to do was the wrong lever: it raises the emulated CPU
+// clock, giving Melee more headroom inside each frame, but the frames still
+// arrive at sixty a second because the frame limiter says so. It cost host CPU
+// and bought no speed.
+//
+// Sound is muted along with it, because Melee at several times speed does not
+// read as "catching up", it reads as broken. The viewer's own mute setting is
+// put back afterwards rather than assumed.
 static void PeppyCatchUpSpeed(bool fast)
 {
 	static bool applied = false;
-	static bool prevEnable = false;
-	static float prevFactor = 1.0f;
 	static bool prevMuted = false;
 
 	if (fast == applied)
@@ -1574,23 +1575,18 @@ static void PeppyCatchUpSpeed(bool fast)
 
 	if (fast)
 	{
-		prevEnable = SConfig::GetInstance().m_OCEnable;
-		prevFactor = SConfig::GetInstance().m_OCFactor;
 		prevMuted = SConfig::GetInstance().m_IsMuted;
-		SConfig::GetInstance().m_OCEnable = true;
-		SConfig::GetInstance().m_OCFactor = 4.0f;
 		SConfig::GetInstance().m_IsMuted = true;
 	}
 	else
 	{
-		SConfig::GetInstance().m_OCFactor = prevFactor;
-		SConfig::GetInstance().m_OCEnable = prevEnable;
 		SConfig::GetInstance().m_IsMuted = prevMuted;
 	}
 	AudioCommon::UpdateSoundStream();
+	Core::SetIsThrottlerTempDisabled(fast);
 
 	applied = fast;
-	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Catch-up %s (4x clock, muted)", fast ? "on" : "off");
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Catch-up %s (throttle off, muted)", fast ? "on" : "off");
 }
 
 bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
@@ -1603,8 +1599,16 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	{
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
 		PeppyCatchUpSpeed(behind > 120);
+
+		// Say so, once a second, so a run that does not catch up can be told
+		// apart from one that never tried.
+		if ((frame % 60) == 0)
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s", frame,
+			         SlippiMatchmaking::PeppyWatchLatestFrame(), behind,
+			         behind > 120 ? "catching up" : (behind > 10 ? "trailing" : "level"));
+
 		if (behind > 120)
-			return true; // a long way back: every frame, at 4x clock
+			return true; // a long way back: advance as well as running unthrottled
 		if (behind > 10)
 			return (frame % 2) == 0; // trailing: gain a frame every other one
 		return false;                // level: hold a small cushion and play normally

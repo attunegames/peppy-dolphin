@@ -742,15 +742,15 @@ void SlippiNetplayClient::PeppyRecord(const u8 *data, size_t len)
 	if (len < 5 || data[0] != NP_MSG_SLIPPI_PAD)
 		return;
 
-	s32 frame = (s32)((data[1] << 24) | (data[2] << 16) | (data[3] << 8) | data[4]);
-
 	std::lock_guard<std::mutex> lk(m_spectators_mutex);
-	if (frame < m_history_last_frame)
-	{
-		m_game_history.clear();
-		WARN_LOG(SLIPPI_ONLINE, "[Peppy] New game - history reset");
-	}
-	m_history_last_frame = frame;
+
+	// Note there is deliberately no "the frame went backwards, so this is a new
+	// game" rule here any more. Frame numbers go backwards all the time in normal
+	// play: every pad packet leads with the oldest unacknowledged frame, and both
+	// directions are recorded interleaved. That rule was therefore emptying the
+	// buffer several times a second, which is why a spectator joining late was
+	// caught up on nothing at all. A new game is announced explicitly instead, by
+	// StartSlippiGame and PeppyEndGame.
 
 	// A runaway buffer would be worse than a watcher missing the start.
 	if (m_game_history.size() < 40000)
@@ -770,7 +770,6 @@ void SlippiNetplayClient::PeppyEndGame()
 	m_game_history.clear();
 	m_match_selections.clear();
 	m_remote_selections.clear();
-	m_history_last_frame = -1;
 }
 
 void SlippiNetplayClient::PeppyForward(const u8 *data, size_t len, bool reliable)
@@ -1388,6 +1387,7 @@ void SlippiNetplayClient::StartSlippiGame()
 		std::string *dest[2] = {&m_match_selections, &m_remote_selections};
 
 		std::lock_guard<std::mutex> lk(m_spectators_mutex);
+		m_game_history.clear(); // this game's history starts here and nowhere else
 		for (int i = 0; i < 2; i++)
 		{
 			dest[i]->clear();
