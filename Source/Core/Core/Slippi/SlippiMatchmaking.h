@@ -79,7 +79,7 @@ class SlippiMatchmaking
 		std::string id = "";
 		std::vector<SlippiUser::UserInfo> players;
 		std::vector<u16> stages;
-		u32 items;
+		u32 items = 0; // uninitialised, this is whatever was on the stack - and items turn on
 	};
 
 	void FindMatch(MatchSearchSettings settings);
