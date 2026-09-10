@@ -2485,6 +2485,16 @@ void CEXISlippi::prepareOnlineMatchState()
 			orderedSelections[i]->stageId = ow.stageId;
 		}
 
+		if (SlippiMatchmaking::PeppyWatchActive())
+		{
+			for (int i = 0; i < (int)orderedSelections.size(); i++)
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch block slot %d: char %d colour %d stageSel %d stage %d", i,
+				         orderedSelections[i] ? orderedSelections[i]->characterId : -1,
+				         orderedSelections[i] ? orderedSelections[i]->characterColor : -1,
+				         orderedSelections[i] ? (int)orderedSelections[i]->isStageSelected : -1,
+				         orderedSelections[i] ? orderedSelections[i]->stageId : -1);
+		}
+
 		// Overwrite stage information. Make sure everyone loads the same stage
 		u16 stageId = 0x1F; // Default to battlefield if there was no selection
 		for (const auto &selections : orderedSelections)
@@ -3206,7 +3216,8 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 	// Whether to actually break up the session is a separate question: we only
 	// do it when somebody is waiting. Two people alone in a room keep playing
 	// each other, which is what anyone would expect.
-	if (matchmaking && query.onlineMode == (u8)SlippiMatchmaking::OnlinePlayMode::ROOMS)
+	if (matchmaking && query.onlineMode == (u8)SlippiMatchmaking::OnlinePlayMode::ROOMS &&
+	    !SlippiMatchmaking::PeppyWatchActive())
 	{
 		bool iWon = winnerIdx == matchmaking->LocalPlayerIndex();
 		matchmaking->PeppyReportResult(matchId, iWon);
