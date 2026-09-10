@@ -760,6 +760,19 @@ void SlippiNetplayClient::PeppyRecord(const u8 *data, size_t len)
 // Inputs go out unsequenced, like they do between the players: a dropped pad
 // packet is repaired by the next one, which carries the backlog. Selections are
 // not repairable by anything later, so those go reliably.
+// Nothing from a finished game should be handed to someone arriving for the
+// next one. Without this, a watcher attaching between games is caught up on a
+// match that is already over - the whole history of it, and the characters that
+// played it - and starts rendering the wrong game.
+void SlippiNetplayClient::PeppyEndGame()
+{
+	std::lock_guard<std::mutex> lk(m_spectators_mutex);
+	m_game_history.clear();
+	m_match_selections.clear();
+	m_remote_selections.clear();
+	m_history_last_frame = -1;
+}
+
 void SlippiNetplayClient::PeppyForward(const u8 *data, size_t len, bool reliable)
 {
 	std::lock_guard<std::mutex> lk(m_spectators_mutex);
@@ -820,11 +833,18 @@ void SlippiNetplayClient::Send(sf::Packet &packet)
 	}
 	else if (outMid == NP_MSG_SLIPPI_MATCH_SELECTIONS)
 	{
-		// Our own character, sent live. The opponent's is forwarded where it
-		// arrives. A watcher that is already attached when a new game starts gets
-		// both sides this way; one that attaches later is sent the pair kept at
-		// game start. Before this, only the opponent's ever reached a watcher, so
-		// it had half a match and never began.
+		// Our own character: kept as well as forwarded live.
+		//
+		// Forwarding alone only reaches a watcher already attached. Someone who
+		// attaches after we locked in but before the game starts is in neither
+		// window - too late for the forward, too early for the game-start
+		// snapshot - and that gap is exactly where a spectator rotating out of a
+		// finished match lands. Keeping it means whoever turns up is told what is
+		// known right now.
+		{
+			std::lock_guard<std::mutex> lk(m_spectators_mutex);
+			m_match_selections.assign((const char *)packet.getData(), packet.getDataSize());
+		}
 		PeppyForward((const u8 *)packet.getData(), packet.getDataSize(), true);
 	}
 }
@@ -1187,9 +1207,12 @@ void SlippiNetplayClient::ThreadFunc()
 				else if (netEvent.packet->dataLength >= 2 &&
 				         netEvent.packet->data[0] == NP_MSG_SLIPPI_MATCH_SELECTIONS)
 				{
-					// Forwarded live so a watcher already attached sees the next
-					// game's characters. The catch-up copy is kept at game start
-					// instead, where both players' selections are known at once.
+					// The opponent's character, kept and forwarded for the same
+					// reasons as our own above.
+					{
+						std::lock_guard<std::mutex> lk(m_spectators_mutex);
+						m_remote_selections.assign((const char *)netEvent.packet->data, netEvent.packet->dataLength);
+					}
 					PeppyForward(netEvent.packet->data, netEvent.packet->dataLength, true);
 				}
 
