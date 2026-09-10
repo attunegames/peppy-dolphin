@@ -1096,6 +1096,11 @@ std::atomic<u64> s_last_frame_at(0);
 // watcher showed no inputs have now been wrong, so this counts it rather than
 // reasoning about it: whether the frame was found at all, and whether what was
 // found is anything other than a neutral controller.
+// The match on screen is one we are only watching. Unlike s_watching this
+// survives the stream ending, because the moment that matters - the game
+// finishing - is precisely when the stream has already stopped.
+std::atomic<bool> s_watched_match(false);
+
 std::atomic<int> s_pad_hit[4];
 std::atomic<int> s_pad_miss[4];
 std::atomic<int> s_pad_live[4];
@@ -1601,6 +1606,16 @@ u16 SlippiMatchmaking::PeppyWatchStage()
 {
 	std::lock_guard<std::mutex> lk(s_selections.m);
 	return s_selections.Stage();
+}
+
+void SlippiMatchmaking::PeppyWatchSetMatchLatch(bool watched)
+{
+	s_watched_match = watched;
+}
+
+bool SlippiMatchmaking::PeppyWatchMatchLatched()
+{
+	return s_watched_match.load();
 }
 
 std::string SlippiMatchmaking::PeppyWatchPadReport()
