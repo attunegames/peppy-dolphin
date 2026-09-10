@@ -1571,6 +1571,7 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 // Set when a Rooms game finishes, spent the next time we are back at an idle
 // character select with nothing else going on.
 static bool peppyRequeue = false;
+static u64 peppyRequeueAt = 0; // when it became due - the teardown needs a head start
 
 static void PeppyCatchUpSpeed(bool fast)
 {
@@ -2286,7 +2287,11 @@ void CEXISlippi::prepareOnlineMatchState()
 	// Peppy: rejoin the queue after a game, without waiting to be told. Melee is
 	// back at the character select and matchmaking has been torn down, which is
 	// exactly the moment the player would otherwise have to press Start again.
+	// Not instantly: the previous connection is torn down on a detached thread and
+	// still holds our netplay port, which the new one has to bind. A second is
+	// longer than that takes and shorter than anyone reaching for the controller.
 	if (peppyRequeue && matchmaking && !SlippiMatchmaking::PeppyWatchActive() &&
+	    Common::Timer::GetTimeMs() - peppyRequeueAt > 1000 &&
 	    matchmaking->GetMatchmakeState() == SlippiMatchmaking::ProcessState::IDLE &&
 	    lastSearch.mode == SlippiMatchmaking::OnlinePlayMode::ROOMS)
 	{
@@ -3367,6 +3372,7 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 		// the loser has to remember to requeue, and the room quietly matches
 		// around them while they sit at the character select.
 		peppyRequeue = true;
+		peppyRequeueAt = Common::Timer::GetTimeMs();
 
 		if (matchmaking->PeppyShouldRotate() && slippi_netplay)
 		{
