@@ -107,6 +107,11 @@ jobs:
             throw "DirectX SDK is not installed - DX9 and XAudio2 will not compile"
           }
           Write-Host "DirectX SDK present at $dxdir"
+          # The step is judged by $LASTEXITCODE, and the last native command to
+          # run was a choco attempt that failed on the way to the fallback. So a
+          # successful install still failed the build, one step before compiling.
+          # Presence is the test that matters, and it has just passed.
+          exit 0
       - name: 'Fetch Git Tags'
         shell: bash
         if: success()
