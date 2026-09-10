@@ -1559,11 +1559,15 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 // that problem, so it pulls exactly that lever: the frame-advance signal on its
 // own tops out at double speed, which will not close a minute in any reasonable
 // time.
+// Sound is muted along with it. An overclocked game plays its audio at the same
+// multiple, and four times speed Melee does not read as "catching up", it reads
+// as broken. The player's own mute setting is put back afterwards, not assumed.
 static void PeppyCatchUpSpeed(bool fast)
 {
 	static bool applied = false;
 	static bool prevEnable = false;
 	static float prevFactor = 1.0f;
+	static bool prevMuted = false;
 
 	if (fast == applied)
 		return;
@@ -1572,17 +1576,21 @@ static void PeppyCatchUpSpeed(bool fast)
 	{
 		prevEnable = SConfig::GetInstance().m_OCEnable;
 		prevFactor = SConfig::GetInstance().m_OCFactor;
+		prevMuted = SConfig::GetInstance().m_IsMuted;
 		SConfig::GetInstance().m_OCEnable = true;
 		SConfig::GetInstance().m_OCFactor = 4.0f;
+		SConfig::GetInstance().m_IsMuted = true;
 	}
 	else
 	{
 		SConfig::GetInstance().m_OCFactor = prevFactor;
 		SConfig::GetInstance().m_OCEnable = prevEnable;
+		SConfig::GetInstance().m_IsMuted = prevMuted;
 	}
+	AudioCommon::UpdateSoundStream();
 
 	applied = fast;
-	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Catch-up overclock %s", fast ? "on" : "off");
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Catch-up %s (4x clock, muted)", fast ? "on" : "off");
 }
 
 bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
