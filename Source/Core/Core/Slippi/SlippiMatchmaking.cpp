@@ -832,6 +832,15 @@ struct PeppyTimeline
 	s32 low = 0, high = 0;
 	bool any = false;
 
+	// The highest frame every player's input has arrived for, contiguously from
+	// the start. This - not `high` - is how far the simulation may safely run.
+	// `high` moves as soon as ANY packet mentions a frame, so running to it means
+	// playing frames with one player's input missing, which is fed to Melee as a
+	// neutral controller. That is a permanent divergence: the watcher was correct
+	// until one such frame went by and wrong for the rest of the match.
+	s32 completeThrough = 0;
+	bool completeInit = false;
+
 	void Add(const u8 *d, size_t len)
 	{
 		if (len < PEPPY_PAD_OFFSET + PEPPY_PAD_STRIDE)
@@ -864,6 +873,50 @@ struct PeppyTimeline
 			high = frame;
 	}
 
+	// Call with the lock held.
+	void AdvanceComplete()
+	{
+		if (!any)
+			return;
+		if (!completeInit)
+		{
+			completeThrough = low - 1;
+			completeInit = true;
+		}
+		for (;;)
+		{
+			auto it = present.find(completeThrough + 1);
+			if (it == present.end())
+				break;
+			bool all = true;
+			for (int i = 0; i < 4; i++)
+				if (seen[i] && !it->second[i])
+				{
+					all = false;
+					break;
+				}
+			if (!all)
+				break;
+			completeThrough++;
+		}
+
+		// A hole that never fills would stall the watcher forever, which is worse
+		// than one bad frame. Five seconds is far longer than the backlog every
+		// pad packet carries, so anything still missing by then is not coming.
+		if (high - completeThrough > 300)
+		{
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Giving up on frame %d - incomplete for 5s", completeThrough + 1);
+			completeThrough++;
+		}
+	}
+
+	s32 CompleteHigh()
+	{
+		std::lock_guard<std::mutex> lk(m);
+		AdvanceComplete();
+		return completeInit ? completeThrough : 0;
+	}
+
 	void Reset()
 	{
 		std::lock_guard<std::mutex> lk(m);
@@ -871,6 +924,8 @@ struct PeppyTimeline
 		present.clear();
 		seen.fill(false);
 		any = false;
+		completeInit = false;
+		completeThrough = 0;
 	}
 
 	bool Has()
@@ -1287,6 +1342,18 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 		return;
 	}
 
+	// Being given a match means we are a player now. Any watch has to end here
+	// and not politely: a drain waits for frames to be played out, and nothing
+	// plays frames at the character select, so it would wait forever - and while
+	// watch mode is on, the CSS cannot be locked in. That is why a player could
+	// not press Start until their opponent did.
+	if (s_watching.load())
+	{
+		s_watching = false;
+		s_draining = false;
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Paired up - leaving watch mode");
+	}
+
 	if (state == "stun")
 	{
 		std::string external;
@@ -1508,8 +1575,7 @@ void SlippiMatchmaking::PeppyWatchSetFrame(s32 frame)
 
 s32 SlippiMatchmaking::PeppyWatchLatestFrame()
 {
-	std::lock_guard<std::mutex> lk(s_timeline.m);
-	return s_timeline.any ? s_timeline.high : 0;
+	return s_timeline.CompleteHigh();
 }
 
 bool SlippiMatchmaking::PeppyWatchPad(s32 frame, u8 idx, u8 *out)
