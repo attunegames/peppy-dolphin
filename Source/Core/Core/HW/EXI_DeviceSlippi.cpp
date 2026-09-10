@@ -2326,6 +2326,14 @@ void CEXISlippi::prepareOnlineMatchState()
 	{
 		SlippiMatchmaking::PeppyWatchSetMatchLatch(false);
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch over - back to the character select");
+
+		// And straight back into the queue, exactly as finishing a game does.
+		// A spectator is someone waiting for a turn, so dropping them out of the
+		// queue when their watch ends is backwards: the two who just played stay
+		// queued and the one who has been waiting longest does not.
+		peppyRequeue = true;
+		peppyRequeueAt = Common::Timer::GetTimeMs();
+
 		handleConnectionCleanup();
 		prepareOnlineMatchState();
 		return;
