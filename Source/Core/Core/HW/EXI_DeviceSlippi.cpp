@@ -1598,24 +1598,30 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	// starts a game that is already in progress, so being behind is the normal
 	// state and catching up is the whole job. Advancing a frame is how Melee is
 	// told to run one more than the clock would give it.
+	// A watcher NEVER advances, and this is the whole of it.
+	//
+	// Advancing is Melee's time-sync nudge, not a fast-forward: it moves the
+	// frame counter on and asks for the next opponent inputs without running the
+	// game. Used thousands of times to "catch up", it does not replay the match -
+	// it skips it. The watcher then arrives at the live frame holding a state
+	// that never happened: nobody damaged, the clock a minute behind, and only
+	// inputs from that moment on having any effect. Every measurement said level
+	// with complete inputs, and every one of them was describing a simulation
+	// that had been jumped over rather than played.
+	//
+	// Speed comes from the throttler instead, which makes the emulator run every
+	// frame properly, just faster than real time.
 	if (SlippiMatchmaking::PeppyWatchActive())
 	{
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
-		PeppyCatchUpSpeed(behind > 120);
+		PeppyCatchUpSpeed(behind > 10);
 
-		// Say so, once a second, so a run that does not catch up can be told
-		// apart from one that never tried.
 		if ((frame % 60) == 0)
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s | pads: %s", frame,
-			         SlippiMatchmaking::PeppyWatchLatestFrame(), behind,
-			         behind > 120 ? "catching up" : (behind > 10 ? "trailing" : "level"),
+			         SlippiMatchmaking::PeppyWatchLatestFrame(), behind, behind > 10 ? "catching up" : "level",
 			         SlippiMatchmaking::PeppyWatchPadReport().c_str());
 
-		if (behind > 120)
-			return true; // a long way back: advance as well as running unthrottled
-		if (behind > 10)
-			return (frame % 2) == 0; // trailing: gain a frame every other one
-		return false;                // level: hold a small cushion and play normally
+		return false;
 	}
 	PeppyCatchUpSpeed(false);
 
