@@ -208,7 +208,7 @@ class SlippiNetplayClient
 	void PeppySetRemoteSelections(const SlippiPlayerSelections &sel);
 
 	void PeppyRecord(const u8 *data, size_t len);
-	void PeppyForward(const u8 *data, size_t len);
+	void PeppyForward(const u8 *data, size_t len, bool reliable = false);
 	SlippiDisconnectReason GetDisconnectReason();
 	SlippiMatchInfo *GetMatchInfo();
 	SlippiPlayerSelections GetSlippiRemoteChatMessage(bool isChatEnabled);
