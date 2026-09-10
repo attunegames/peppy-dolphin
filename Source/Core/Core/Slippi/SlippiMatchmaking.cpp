@@ -1092,6 +1092,14 @@ std::atomic<bool> s_restart(false);
 // nothing left to finish, however many frames it is still holding.
 std::atomic<u64> s_last_frame_at(0);
 
+// What the simulation is actually being fed. Three separate theories about why a
+// watcher showed no inputs have now been wrong, so this counts it rather than
+// reasoning about it: whether the frame was found at all, and whether what was
+// found is anything other than a neutral controller.
+std::atomic<int> s_pad_hit[4];
+std::atomic<int> s_pad_miss[4];
+std::atomic<int> s_pad_live[4];
+
 void PeppyWatch(std::string endpoint)
 {
 	auto colon = endpoint.find(':');
@@ -1595,6 +1603,17 @@ u16 SlippiMatchmaking::PeppyWatchStage()
 	return s_selections.Stage();
 }
 
+std::string SlippiMatchmaking::PeppyWatchPadReport()
+{
+	std::stringstream out;
+	for (int i = 0; i < 2; i++)
+	{
+		out << "p" << i << " hit " << s_pad_hit[i].exchange(0) << " miss " << s_pad_miss[i].exchange(0) << " live "
+		    << s_pad_live[i].exchange(0) << (i == 0 ? " | " : "");
+	}
+	return out.str();
+}
+
 bool SlippiMatchmaking::PeppyWatchRestartPending()
 {
 	return s_restart.load();
@@ -1668,12 +1687,23 @@ bool SlippiMatchmaking::PeppyWatchPad(s32 frame, u8 idx, u8 *out)
 	std::lock_guard<std::mutex> lk(s_timeline.m);
 	auto it = s_timeline.frames.find(frame);
 	if (it == s_timeline.frames.end())
+	{
+		s_pad_miss[idx]++;
 		return false;
+	}
 
 	// The wire carries 8 bytes per pad; Melee's structure is larger and the rest
 	// is local-only, so it is zeroed rather than guessed at.
 	memset(out, 0, SLIPPI_PAD_FULL_SIZE);
 	memcpy(out, it->second[idx].data(), PEPPY_PAD_STRIDE);
+
+	s_pad_hit[idx]++;
+	for (int i = 0; i < PEPPY_PAD_STRIDE; i++)
+		if (it->second[idx][i] != 0)
+		{
+			s_pad_live[idx]++;
+			break;
+		}
 	return true;
 }
 

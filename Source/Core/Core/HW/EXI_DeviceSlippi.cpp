@@ -1606,9 +1606,10 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 		// Say so, once a second, so a run that does not catch up can be told
 		// apart from one that never tried.
 		if ((frame % 60) == 0)
-			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s", frame,
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s | pads: %s", frame,
 			         SlippiMatchmaking::PeppyWatchLatestFrame(), behind,
-			         behind > 120 ? "catching up" : (behind > 10 ? "trailing" : "level"));
+			         behind > 120 ? "catching up" : (behind > 10 ? "trailing" : "level"),
+			         SlippiMatchmaking::PeppyWatchPadReport().c_str());
 
 		if (behind > 120)
 			return true; // a long way back: advance as well as running unthrottled
@@ -2063,6 +2064,11 @@ void CEXISlippi::startFindMatch(u8 *payload)
 
 	// Store this search so we know what was queued for
 	lastSearch = search;
+
+	// Melee only sends this when it accepts the Start press, so its presence or
+	// absence settles whether "cannot press Start" is Melee refusing the input or
+	// the room declining to pair us.
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Melee asked to search (mode %d)", (int)search.mode);
 
 	// While we do have another condition that checks characters after being connected, it's nice to give
 	// someone an early error before they even queue so that they wont enter the queue and make someone
