@@ -1445,7 +1445,7 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	// timeline is thousands of frames ahead, nothing skips, and it runs as fast
 	// as the emulator will go until it draws level.
 	if (SlippiMatchmaking::PeppyWatchActive())
-		return SlippiMatchmaking::PeppyWatchLatestFrame() < frame - ROLLBACK_MAX_FRAMES;
+		return SlippiMatchmaking::PeppyWatchLatestFrame() < frame;
 
 	auto status = slippi_netplay->GetSlippiConnectStatus();
 	bool connectionFailed = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_FAILED;
@@ -1555,10 +1555,19 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 
 bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 {
-	// A watcher plays back a match that already happened; there is nobody to
-	// stay in step with, so it simply follows the timeline.
+	// A watcher has no opponent to stay level with - it chases the timeline. It
+	// starts a game that is already in progress, so being behind is the normal
+	// state and catching up is the whole job. Advancing a frame is how Melee is
+	// told to run one more than the clock would give it.
 	if (SlippiMatchmaking::PeppyWatchActive())
-		return false;
+	{
+		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
+		if (behind > 120)
+			return true; // a long way back: double speed until it closes
+		if (behind > 10)
+			return (frame % 2) == 0; // trailing: gain a frame every other one
+		return false;                // level: hold a small cushion and play normally
+	}
 
 	// If the opponent is a bot running ahead to give us more inputs, we should
 	// just keep going at our own pace rather than trying to catch up.
