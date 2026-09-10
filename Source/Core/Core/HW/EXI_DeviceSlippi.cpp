@@ -1583,6 +1583,7 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 // ours.
 static std::atomic<bool> peppyCleanupBusy(false);
 
+static u64 peppySelectionsSentAt = 0; // last time we told the opponent our character
 static bool peppyRequeue = false;
 static u64 peppyRequeueAt = 0; // when it became due - the teardown needs a head start
 
@@ -2463,6 +2464,23 @@ void CEXISlippi::prepareOnlineMatchState()
 				{
 					remotePlayersReady = 0;
 				}
+			}
+
+			// Peppy: say it again if they have not heard us.
+			//
+			// Both clients learn about their pairing from their own poll of the
+			// room rather than from one announcement, so they can arrive a second
+			// or two apart. Selections are sent once, at the moment a connection
+			// exists - so whoever locked in during that gap sent their character
+			// to nobody, and the other player waits forever on something that was
+			// already sent. One of them starts the match, the other sits at
+			// "waiting on opponent", and the match freezes on Ready.
+			if (remotePlayersReady == 0 && localSelections.isCharacterSelected &&
+			    !SlippiMatchmaking::PeppyWatchActive() &&
+			    Common::Timer::GetTimeMs() - peppySelectionsSentAt > 1000)
+			{
+				peppySelectionsSentAt = Common::Timer::GetTimeMs();
+				slippi_netplay->SetMatchSelections(localSelections);
 			}
 
 			if (remotePlayerCount == 1)
