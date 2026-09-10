@@ -825,6 +825,7 @@ struct PeppyTimeline
 {
 	std::mutex m;
 	std::map<s32, std::array<std::array<u8, PEPPY_PAD_STRIDE>, 4>> frames;
+	std::map<s32, std::array<bool, 4>> present;
 	std::array<bool, 4> seen{};
 	s32 low = 0, high = 0;
 	bool any = false;
@@ -848,6 +849,7 @@ struct PeppyTimeline
 			s32 f = frame - i; // the queue runs newest first
 			auto &slot = frames[f][idx];
 			memcpy(slot.data(), d + PEPPY_PAD_OFFSET + i * PEPPY_PAD_STRIDE, PEPPY_PAD_STRIDE);
+			present[f][idx] = true;
 		}
 		if (!any)
 		{
@@ -864,6 +866,7 @@ struct PeppyTimeline
 	{
 		std::lock_guard<std::mutex> lk(m);
 		frames.clear();
+		present.clear();
 		seen.fill(false);
 		any = false;
 	}
@@ -896,8 +899,9 @@ struct PeppyTimeline
 				missing++;
 				continue;
 			}
+			auto pit = present.find(f);
 			for (int i = 0; i < 4; i++)
-				if (seen[i] && it->second[i] == std::array<u8, PEPPY_PAD_STRIDE>{})
+				if (seen[i] && (pit == present.end() || !pit->second[i]))
 					missing++;
 		}
 
@@ -917,7 +921,7 @@ struct PeppySelections
 	bool have[4] = {};
 	u8 character[4] = {};
 	u8 colour[4] = {};
-	u16 stage = 0;
+	u16 stage[4] = {};
 	u32 rngOffset = 0;
 
 	// Laid out by WriteSelectionsToPacket: characterId, characterColor,
@@ -934,9 +938,10 @@ struct PeppySelections
 		character[idx] = d[1];
 		colour[idx] = d[2];
 		have[idx] = d[3] != 0;
-		u16 st = (u16)((d[5] << 8) | d[6]);
-		if (st != 0)
-			stage = st;
+		// Each player sends the stage THEY rolled. The match uses the first
+		// selection in player order, so a watcher has to do the same rather than
+		// keep whichever packet happened to arrive last.
+		stage[idx] = (u16)((d[5] << 8) | d[6]);
 		if (len >= 12)
 			rngOffset = (u32)((d[8] << 24) | (d[9] << 16) | (d[10] << 8) | d[11]);
 	}
@@ -945,8 +950,19 @@ struct PeppySelections
 	{
 		std::lock_guard<std::mutex> lk(m);
 		for (int i = 0; i < 4; i++)
+		{
 			have[i] = false;
-		stage = 0;
+			stage[i] = 0;
+		}
+	}
+
+	// First selection in player order wins, matching how the game decides.
+	u16 Stage()
+	{
+		for (int i = 0; i < 4; i++)
+			if (have[i] && stage[i] != 0)
+				return stage[i];
+		return 0;
 	}
 
 	int Count()
@@ -966,7 +982,7 @@ struct PeppySelections
 		for (int i = 0; i < 4; i++)
 			if (have[i])
 				out << "p" << (int)i << "=char" << (int)character[i] << "/c" << (int)colour[i] << " ";
-		out << "stage " << stage;
+		out << "stage " << Stage();
 		return out.str();
 	}
 };
@@ -1402,7 +1418,7 @@ u8 SlippiMatchmaking::PeppyWatchColour(u8 idx)
 u16 SlippiMatchmaking::PeppyWatchStage()
 {
 	std::lock_guard<std::mutex> lk(s_selections.m);
-	return s_selections.stage;
+	return s_selections.Stage();
 }
 
 s32 SlippiMatchmaking::PeppyWatchFrame()
