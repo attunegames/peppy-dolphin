@@ -1568,6 +1568,10 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 // Sound is muted along with it, because Melee at several times speed does not
 // read as "catching up", it reads as broken. The viewer's own mute setting is
 // put back afterwards rather than assumed.
+// Set when a Rooms game finishes, spent the next time we are back at an idle
+// character select with nothing else going on.
+static bool peppyRequeue = false;
+
 static void PeppyCatchUpSpeed(bool fast)
 {
 	static bool applied = false;
@@ -2278,6 +2282,18 @@ void CEXISlippi::prepareOnlineMatchState()
 		isLocalConnected = true;
 	}
 #endif
+
+	// Peppy: rejoin the queue after a game, without waiting to be told. Melee is
+	// back at the character select and matchmaking has been torn down, which is
+	// exactly the moment the player would otherwise have to press Start again.
+	if (peppyRequeue && matchmaking && !SlippiMatchmaking::PeppyWatchActive() &&
+	    matchmaking->GetMatchmakeState() == SlippiMatchmaking::ProcessState::IDLE &&
+	    lastSearch.mode == SlippiMatchmaking::OnlinePlayMode::ROOMS)
+	{
+		peppyRequeue = false;
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Game over - back in the queue");
+		matchmaking->FindMatch(lastSearch);
+	}
 
 	// Peppy: a finished watch leaves this client in a state Melee cannot resolve.
 	// The matchmaking search is still running, so the character select shows
@@ -3344,6 +3360,13 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 	{
 		bool iWon = winnerIdx == matchmaking->LocalPlayerIndex();
 		matchmaking->PeppyReportResult(matchId, iWon);
+
+		// Finishing a game puts you back in the queue without pressing anything.
+		// You press Start once, when you arrive; after that the room runs itself
+		// and losing hands you straight back to the end of the line. Otherwise
+		// the loser has to remember to requeue, and the room quietly matches
+		// around them while they sit at the character select.
+		peppyRequeue = true;
 
 		if (matchmaking->PeppyShouldRotate() && slippi_netplay)
 		{
