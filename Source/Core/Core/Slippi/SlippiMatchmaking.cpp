@@ -1191,13 +1191,16 @@ void PeppyWatch(std::string endpoint)
 			s32 frame = (s32)((d[1] << 24) | (d[2] << 16) | (d[3] << 8) | d[4]);
 			packets++;
 
-			// A new game announces itself as a frame number far below where we
-			// are. Nothing else moves backwards by more than the handful of
-			// frames a pad packet's backlog carries, so the threshold is not
-			// ambiguous - and without this the watcher kept playing the previous
-			// game forever, merging the new one into the old timeline at frame
-			// numbers it had already gone past.
-			if (frame < s_timeline.HighFrame() - 300)
+			// A new game announces itself by starting again at frame 1, and only
+			// once we are live.
+			//
+			// Not during catch-up: the backlog arrives from frame 1 upwards while
+			// live packets are still being forwarded, so the two interleave and
+			// the high-water mark is already thousands of frames ahead when the
+			// start of the backlog turns up. A looser test than this - anything
+			// "far below where we are" - therefore deleted the very history it
+			// was being sent, and left the watcher live with no past at all.
+			if (!catchingUp && frame < 300 && s_timeline.HighFrame() > 1000)
 			{
 				WARN_LOG(SLIPPI_ONLINE, "[Peppy] New game at frame %d (was %d) - restarting watch", frame,
 				         s_timeline.HighFrame());
