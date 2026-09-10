@@ -1300,7 +1300,7 @@ void PeppyHeartbeat()
 		try
 		{
 			json resp = json::parse(raw);
-			if (resp.contains("active"))
+			if (resp.find("active") != resp.end())
 				PeppyShowRoom(resp, 11000);
 		}
 		catch (...)
