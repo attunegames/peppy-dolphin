@@ -476,11 +476,12 @@ void PeppyShowRoom(const json &resp, u32 ms = 4000)
 	auto active = resp.find("active");
 	if (active != resp.end() && active->is_array() && active->size() >= 2)
 	{
-		// A pairing exists well before the two players have connected - the room
-		// arranges it the moment they are both free. Only "ready" means a game is
-		// actually being played.
-		out << (resp.value("live", false) ? " - playing: " : " - next up: ") << (*active)[0].value("name", "?")
-		    << " vs " << (*active)[1].value("name", "?");
+		// "Ready" only means the two of them have swapped addresses, which happens
+		// long before either locks in - so the room cannot honestly say a game is
+		// being played. The one client that knows is the one receiving its
+		// frames, and that is this one when it is watching.
+		out << (SlippiMatchmaking::PeppyWatchActive() ? " - playing: " : " - up next: ") << (*active)[0].value("name", "?") << " vs "
+		    << (*active)[1].value("name", "?");
 	}
 	else
 		out << " - no match yet";
