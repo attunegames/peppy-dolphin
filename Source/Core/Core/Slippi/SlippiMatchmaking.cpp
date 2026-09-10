@@ -1088,6 +1088,10 @@ std::atomic<bool> s_draining(false);
 // one. Ends the watcher's match so a fresh one starts on the new timeline.
 std::atomic<bool> s_restart(false);
 
+// When a frame was last actually played. A drain that stops consuming frames has
+// nothing left to finish, however many frames it is still holding.
+std::atomic<u64> s_last_frame_at(0);
+
 void PeppyWatch(std::string endpoint)
 {
 	auto colon = endpoint.find(':');
@@ -1609,7 +1613,26 @@ u32 SlippiMatchmaking::PeppyWatchRngOffset()
 
 void SlippiMatchmaking::PeppyStillOnline()
 {
-	s_online_alive.store(Common::Timer::GetTimeMs());
+	u64 now = Common::Timer::GetTimeMs();
+	s_online_alive.store(now);
+
+	// A drain waits for the frames it is holding to be played out - but nothing
+	// plays frames at the character select, so a watcher whose stream ended there
+	// waited forever. Watch mode holds the character select while it is on, so
+	// the spectator could not press Start at all until somebody else's search
+	// happened to end the watch for them. That is the "challenger cannot press
+	// Start until the winner does" deadlock: two people each waiting on the other
+	// to go first.
+	if (s_draining.load())
+	{
+		u64 last = s_last_frame_at.load();
+		if (last == 0 || now - last > 2000)
+		{
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Nothing is playing out the rest - ending watch");
+			s_draining = false;
+			s_watching = false;
+		}
+	}
 }
 
 s32 SlippiMatchmaking::PeppyWatchFrame()
@@ -1620,6 +1643,7 @@ s32 SlippiMatchmaking::PeppyWatchFrame()
 void SlippiMatchmaking::PeppyWatchSetFrame(s32 frame)
 {
 	s_watch_frame.store(frame);
+	s_last_frame_at.store(Common::Timer::GetTimeMs());
 
 	// Melee drives this every frame, which makes it the natural place to notice
 	// that a finished stream has been played out to its end.
