@@ -89,6 +89,23 @@ class SlippiMatchmaking
 	// Runs on its own thread - never block the EXI path on the network.
 	void PeppyReportResult(const std::string &matchId, bool iWon);
 	bool PeppyShouldRotate();
+
+	// Peppy watch mode. A spectator holds the whole match - what to start and
+	// what both players pressed on every frame - and the EXI device reads it
+	// through these rather than from a live opponent.
+	static bool PeppyWatchActive();
+	static bool PeppyWatchReady();            // both players' selections in hand
+	static u8 PeppyWatchCharacter(u8 idx);
+	static u8 PeppyWatchColour(u8 idx);
+	static u16 PeppyWatchStage();
+	static s32 PeppyWatchLatestFrame();
+	// The frame the watcher's game is currently on. Melee drives this - it tells
+	// us which frame it is asking about - so the cursor never has to guess at
+	// pacing, which is what makes this tractable at all.
+	static s32 PeppyWatchFrame();
+	static void PeppyWatchSetFrame(s32 frame);
+	// Fills SLIPPI_PAD_FULL_SIZE bytes; false when that frame is not held.
+	static bool PeppyWatchPad(s32 frame, u8 idx, u8 *out);
 	void MatchmakeThread();
 	ProcessState GetMatchmakeState();
 	bool IsSearching();

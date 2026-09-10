@@ -1243,6 +1243,12 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 
 	s32 frame = Common::swap32(&payload[0]);
 	s32 finalizedFrame = Common::swap32(&payload[4]);
+
+	// Peppy: a watcher's controller ports are fed from the timeline, and this is
+	// where we learn which frame to feed. Melee drives it; we never have to
+	// invent a clock.
+	if (SlippiMatchmaking::PeppyWatchActive())
+		SlippiMatchmaking::PeppyWatchSetFrame(frame);
 	u32 finalizedFrameChecksum = Common::swap32(&payload[8]);
 	u8 delay = payload[12];
 	u8 *inputs = &payload[13];
@@ -1303,7 +1309,8 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 	}
 
 	// Drop inputs that we no longer need (inputs older than the finalized frame passed in)
-	slippi_netplay->DropOldRemoteInputs(finalizedFrame);
+	if (!SlippiMatchmaking::PeppyWatchActive())
+		slippi_netplay->DropOldRemoteInputs(finalizedFrame);
 
 	bool shouldSkip = shouldSkipOnlineFrame(frame, finalizedFrame);
 	if (shouldSkip)
@@ -1313,11 +1320,16 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 	}
 	else
 	{
-		// Consider disconnecting from a match if performance is poor
-		handlePoorMatchPerformance(frame);
+		// A watcher has no one to send to and no connection to judge - it only
+		// consumes. Everything about this frame comes from the timeline.
+		if (!SlippiMatchmaking::PeppyWatchActive())
+		{
+			// Consider disconnecting from a match if performance is poor
+			handlePoorMatchPerformance(frame);
 
-		// Send the input for this frame along with everything that has yet to be acked
-		handleSendInputs(frame, delay, finalizedFrame, finalizedFrameChecksum, inputs);
+			// Send the input for this frame along with everything that has yet to be acked
+			handleSendInputs(frame, delay, finalizedFrame, finalizedFrameChecksum, inputs);
+		}
 	}
 
 	prepareOpponentInputs(frame, shouldSkip);
@@ -1524,6 +1536,11 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 
 bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 {
+	// A watcher plays back a match that already happened; there is nobody to
+	// stay in step with, so it simply follows the timeline.
+	if (SlippiMatchmaking::PeppyWatchActive())
+		return false;
+
 	// If the opponent is a bot running ahead to give us more inputs, we should
 	// just keep going at our own pace rather than trying to catch up.
 	if (opponentRunahead())
@@ -1671,13 +1688,40 @@ bool CEXISlippi::opponentRunahead()
 	return true;
 }
 
+
+// Peppy: the opponent's inputs for a watcher come from the received timeline
+// rather than from a connection. Same shape Slippi already expects - newest
+// frame first, one entry per frame back through the rollback window.
+static std::unique_ptr<SlippiRemotePadOutput> PeppyWatchRemotePad(s32 frame, u8 port)
+{
+	auto out = std::make_unique<SlippiRemotePadOutput>();
+	out->isDisconnected = false;
+	out->checksumFrame = 0;
+	out->checksum = 0;
+
+	s32 latest = SlippiMatchmaking::PeppyWatchLatestFrame();
+	if (latest > frame)
+		latest = frame; // never run ahead of the frame Melee is asking about
+	out->latestFrame = latest;
+
+	for (s32 f = latest; f > latest - ROLLBACK_MAX_FRAMES && f >= Slippi::GAME_FIRST_FRAME; f--)
+	{
+		u8 buf[SLIPPI_PAD_FULL_SIZE] = {};
+		SlippiMatchmaking::PeppyWatchPad(f, port, buf);
+		out->data.insert(out->data.end(), buf, buf + SLIPPI_PAD_FULL_SIZE);
+	}
+	return out;
+}
+
 void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 {
 	m_read_queue.clear();
 
 	u8 frameResult = 1; // Indicates to continue frame
 
-	auto state = slippi_netplay->GetSlippiConnectStatus();
+	bool watching = SlippiMatchmaking::PeppyWatchActive();
+	auto state = watching ? SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED
+	                      : slippi_netplay->GetSlippiConnectStatus();
 	if (shouldSkip)
 	{
 		// Event though we are skipping an input, we still want to prepare the opponent inputs because
@@ -1706,7 +1750,7 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	u32 lastChecksum = 0;
 	for (int i = 0; i < remotePlayerCount; i++)
 	{
-		results[i] = slippi_netplay->GetSlippiRemotePad(i, ROLLBACK_MAX_FRAMES);
+		results[i] = watching ? PeppyWatchRemotePad(frame, 1) : slippi_netplay->GetSlippiRemotePad(i, ROLLBACK_MAX_FRAMES);
 		if (results[i]->isDisconnected)
 		{
 			continue;
@@ -2145,6 +2189,41 @@ void CEXISlippi::prepareOnlineMatchState()
 	}
 #endif
 
+	// Peppy: a watcher has no opponent and never sat at a character select, but
+	// it does hold the whole match. Rather than branching through the match block
+	// logic below, present it as a player who has chosen and an opponent who has
+	// too - then everything downstream runs unchanged.
+	if (SlippiMatchmaking::PeppyWatchActive() && SlippiMatchmaking::PeppyWatchReady())
+	{
+		if (!slippi_netplay)
+		{
+			slippi_netplay = std::make_unique<SlippiNetplayClient>(true);
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch mode: starting %d vs %d on stage %d",
+			         SlippiMatchmaking::PeppyWatchCharacter(0), SlippiMatchmaking::PeppyWatchCharacter(1),
+			         SlippiMatchmaking::PeppyWatchStage());
+		}
+
+		// Stand in for port 0; the other side is fed as the "remote" player.
+		localSelections.characterId = SlippiMatchmaking::PeppyWatchCharacter(0);
+		localSelections.characterColor = SlippiMatchmaking::PeppyWatchColour(0);
+		localSelections.isCharacterSelected = true;
+		localSelections.playerIdx = 0;
+		localSelections.stageId = SlippiMatchmaking::PeppyWatchStage();
+		localSelections.isStageSelected = true;
+
+		SlippiPlayerSelections remote;
+		remote.characterId = SlippiMatchmaking::PeppyWatchCharacter(1);
+		remote.characterColor = SlippiMatchmaking::PeppyWatchColour(1);
+		remote.isCharacterSelected = true;
+		remote.playerIdx = 1;
+		remote.stageId = SlippiMatchmaking::PeppyWatchStage();
+		remote.isStageSelected = true;
+		slippi_netplay->SetMatchSelections(localSelections);
+		slippi_netplay->PeppySetRemoteSelections(remote);
+
+		mmState = SlippiMatchmaking::ProcessState::CONNECTION_SUCCESS;
+	}
+
 	m_read_queue.push_back(mmState); // Matchmaking State
 
 	u8 localPlayerReady = localSelections.isCharacterSelected;
@@ -2195,12 +2274,14 @@ void CEXISlippi::prepareOnlineMatchState()
 		bool isConnected = true;
 #else
 		auto status = slippi_netplay->GetSlippiConnectStatus();
-		bool isConnected = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED;
+		bool isConnected = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED ||
+		                   SlippiMatchmaking::PeppyWatchActive();
 
 		// If any players are disconnected and the match state is being requested (we are in a lobby),
 		// we should just disconnect. This allows for games to finish with a disconnected player but
 		// after that the "lobby" is terminated.
-		if (slippi_netplay->GetActivePlayerIndices().size() != matchmaking->RemotePlayerCount())
+		if (!SlippiMatchmaking::PeppyWatchActive() &&
+		    slippi_netplay->GetActivePlayerIndices().size() != matchmaking->RemotePlayerCount())
 		{
 			isConnected = false;
 		}

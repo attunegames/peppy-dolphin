@@ -713,6 +713,13 @@ std::unique_ptr<SlippiPlayerSelections> SlippiNetplayClient::readSelectionsFromP
 // Both directions are recorded, so a watcher attached to either player receives
 // both sides' inputs from one connection. The buffer resets when frame numbers
 // go backwards, which is how a new game announces itself.
+void SlippiNetplayClient::PeppySetRemoteSelections(const SlippiPlayerSelections &sel)
+{
+	matchInfo.remotePlayerSelections[0].Merge(const_cast<SlippiPlayerSelections &>(sel));
+	matchInfo.remotePlayerSelections[0].playerIdx = sel.playerIdx;
+	matchInfo.remotePlayerSelections[0].isCharacterSelected = true;
+}
+
 void SlippiNetplayClient::PeppyRecord(const u8 *data, size_t len)
 {
 	if (len < 5 || data[0] != NP_MSG_SLIPPI_PAD)

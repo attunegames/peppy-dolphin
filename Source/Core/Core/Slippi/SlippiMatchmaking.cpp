@@ -42,6 +42,8 @@ class MmMessageType
 namespace
 {
 std::atomic<bool> s_heartbeat(false);
+// Where the watcher's game has got to. Set by Melee as it asks for each frame.
+std::atomic<int> s_watch_frame(0);
 void PeppyHeartbeat(); // defined below, next to the rest of the room polling
 }
 
@@ -866,6 +868,12 @@ struct PeppyTimeline
 		any = false;
 	}
 
+	bool Has()
+	{
+		std::lock_guard<std::mutex> lk(m);
+		return any;
+	}
+
 	// How complete is it? A simulation cannot skip a frame, so the only number
 	// that matters is whether any frame in range is missing a player.
 	std::string Describe()
@@ -1363,6 +1371,71 @@ void SlippiMatchmaking::PeppyReportResult(const std::string &matchId, bool iWon)
 		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_result", body.dump(), PeppyToken());
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Reported %s for %s", iWon ? "a win" : "a loss", matchId.c_str());
 	}).detach();
+}
+
+// ------------------------------------------------- watch mode, for the EXI ---
+//
+// The spectator's data, read by the EXI device in place of a live opponent.
+
+bool SlippiMatchmaking::PeppyWatchActive()
+{
+	return s_watching.load();
+}
+
+bool SlippiMatchmaking::PeppyWatchReady()
+{
+	return s_watching.load() && s_selections.Count() >= 2 && s_timeline.Has();
+}
+
+u8 SlippiMatchmaking::PeppyWatchCharacter(u8 idx)
+{
+	std::lock_guard<std::mutex> lk(s_selections.m);
+	return idx < 4 ? s_selections.character[idx] : 0;
+}
+
+u8 SlippiMatchmaking::PeppyWatchColour(u8 idx)
+{
+	std::lock_guard<std::mutex> lk(s_selections.m);
+	return idx < 4 ? s_selections.colour[idx] : 0;
+}
+
+u16 SlippiMatchmaking::PeppyWatchStage()
+{
+	std::lock_guard<std::mutex> lk(s_selections.m);
+	return s_selections.stage;
+}
+
+s32 SlippiMatchmaking::PeppyWatchFrame()
+{
+	return s_watch_frame.load();
+}
+
+void SlippiMatchmaking::PeppyWatchSetFrame(s32 frame)
+{
+	s_watch_frame.store(frame);
+}
+
+s32 SlippiMatchmaking::PeppyWatchLatestFrame()
+{
+	std::lock_guard<std::mutex> lk(s_timeline.m);
+	return s_timeline.any ? s_timeline.high : 0;
+}
+
+bool SlippiMatchmaking::PeppyWatchPad(s32 frame, u8 idx, u8 *out)
+{
+	if (idx >= 4 || !out)
+		return false;
+
+	std::lock_guard<std::mutex> lk(s_timeline.m);
+	auto it = s_timeline.frames.find(frame);
+	if (it == s_timeline.frames.end())
+		return false;
+
+	// The wire carries 8 bytes per pad; Melee's structure is larger and the rest
+	// is local-only, so it is zeroed rather than guessed at.
+	memset(out, 0, SLIPPI_PAD_FULL_SIZE);
+	memcpy(out, it->second[idx].data(), PEPPY_PAD_STRIDE);
+	return true;
 }
 
 void SlippiMatchmaking::handleMatchmaking()
