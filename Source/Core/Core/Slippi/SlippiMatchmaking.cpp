@@ -921,10 +921,11 @@ struct PeppySelections
 {
 	std::mutex m;
 	bool have[4] = {};
+	bool picked[4] = {}; // this player is the one who chose the stage
 	u8 character[4] = {};
 	u8 colour[4] = {};
 	u16 stage[4] = {};
-	u32 rngOffset = 0;
+	u32 rng[4] = {};
 
 	// Laid out by WriteSelectionsToPacket: characterId, characterColor,
 	// isCharacterSelected, playerIdx, stageId, isStageSelected, rngOffset...
@@ -940,12 +941,13 @@ struct PeppySelections
 		character[idx] = d[1];
 		colour[idx] = d[2];
 		have[idx] = d[3] != 0;
-		// Each player sends the stage THEY rolled. The match uses the first
-		// selection in player order, so a watcher has to do the same rather than
-		// keep whichever packet happened to arrive last.
+		// Both players roll a stage and send it; only one of them is the choice
+		// that counts, and isStageSelected is how the game tells them apart.
+		// Going by "first non-empty" instead put a watcher on a different stage
+		// from the players whenever the picker was not player 0.
 		stage[idx] = (u16)((d[5] << 8) | d[6]);
-		if (len >= 12)
-			rngOffset = (u32)((d[8] << 24) | (d[9] << 16) | (d[10] << 8) | d[11]);
+		picked[idx] = d[7] != 0;
+		rng[idx] = (u32)((d[8] << 24) | (d[9] << 16) | (d[10] << 8) | d[11]);
 	}
 
 	void Reset()
@@ -954,18 +956,28 @@ struct PeppySelections
 		for (int i = 0; i < 4; i++)
 		{
 			have[i] = false;
+			picked[i] = false;
 			stage[i] = 0;
+			rng[i] = 0;
 		}
 	}
 
-	// First selection in player order wins, matching how the game decides.
+	// The player who actually chose, matching how the game decides.
 	u16 Stage()
 	{
+		for (int i = 0; i < 4; i++)
+			if (have[i] && picked[i])
+				return stage[i];
 		for (int i = 0; i < 4; i++)
 			if (have[i] && stage[i] != 0)
 				return stage[i];
 		return 0;
 	}
+
+	// The host's, because that is the one both players run with: each side uses
+	// its own if it is the decider and the host's otherwise. A watcher running
+	// its own offset - or none - diverges the moment anything random happens.
+	u32 Rng() { return rng[0]; }
 
 	int Count()
 	{
@@ -1231,6 +1243,24 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 		// Queued behind a match in progress: attach to it as a read-only peer.
 		// Prefer the LAN address when we share a public IP with them, exactly as
 		// the players do with each other.
+		// The players' names, so the watcher's HUD says who is playing rather than
+		// leaving the tags blank. The room already reports the pair in order -
+		// host first - which is the same order as the player indices.
+		auto active = resp.find("active");
+		if (s_watching && active != resp.end() && active->is_array() && active->size() >= 2)
+		{
+			std::vector<SlippiUser::UserInfo> watched;
+			for (int i = 0; i < 2; i++)
+			{
+				SlippiUser::UserInfo info;
+				info.displayName = (*active)[i].value("name", "");
+				info.connectCode = (*active)[i].value("code", "");
+				info.port = i + 1;
+				watched.push_back(info);
+			}
+			m_playerInfo = watched;
+		}
+
 		auto watch = resp.find("watch");
 		if (!s_watching && watch != resp.end() && watch->is_array() && watch->size() > 0)
 		{
@@ -1434,6 +1464,12 @@ u16 SlippiMatchmaking::PeppyWatchStage()
 {
 	std::lock_guard<std::mutex> lk(s_selections.m);
 	return s_selections.Stage();
+}
+
+u32 SlippiMatchmaking::PeppyWatchRngOffset()
+{
+	std::lock_guard<std::mutex> lk(s_selections.m);
+	return s_selections.Rng();
 }
 
 void SlippiMatchmaking::PeppyStillOnline()
