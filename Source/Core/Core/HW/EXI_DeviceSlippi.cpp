@@ -22,6 +22,8 @@
 #include "Common/Thread.h"
 #include "Core/HW/Memmap.h"
 
+#include <atomic>
+
 #include "AudioCommon/AudioCommon.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
@@ -1570,6 +1572,17 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 // put back afterwards rather than assumed.
 // Set when a Rooms game finishes, spent the next time we are back at an idle
 // character select with nothing else going on.
+// True while the previous connection's sockets are still being closed.
+//
+// They hold our netplay port, and it is pinned for the life of the process, so
+// the next client has to bind that exact port. ENet sets SO_REUSEADDR, which
+// means binding it while the old socket lives SUCCEEDS - and then the replies
+// go to the old socket, leaving the new one able to send and never hear
+// anything back. It does not look like a failure; it looks like the network has
+// gone quiet. Waiting for this flag is the only way to know the port is really
+// ours.
+static std::atomic<bool> peppyCleanupBusy(false);
+
 static bool peppyRequeue = false;
 static u64 peppyRequeueAt = 0; // when it became due - the teardown needs a head start
 
@@ -2290,7 +2303,7 @@ void CEXISlippi::prepareOnlineMatchState()
 	// Not instantly: the previous connection is torn down on a detached thread and
 	// still holds our netplay port, which the new one has to bind. A second is
 	// longer than that takes and shorter than anyone reaching for the controller.
-	if (peppyRequeue && matchmaking && !SlippiMatchmaking::PeppyWatchActive() &&
+	if (peppyRequeue && matchmaking && !SlippiMatchmaking::PeppyWatchActive() && !peppyCleanupBusy.load() &&
 	    Common::Timer::GetTimeMs() - peppyRequeueAt > 1000 &&
 	    matchmaking->GetMatchmakeState() == SlippiMatchmaking::ProcessState::IDLE &&
 	    lastSearch.mode == SlippiMatchmaking::OnlinePlayMode::ROOMS)
@@ -3283,6 +3296,8 @@ void doConnectionCleanup(std::unique_ptr<SlippiMatchmaking> mm, std::unique_ptr<
 
 	if (nc)
 		nc.reset();
+
+	peppyCleanupBusy.store(false);
 }
 
 void CEXISlippi::handleConnectionCleanup()
@@ -3290,6 +3305,7 @@ void CEXISlippi::handleConnectionCleanup()
 	ERROR_LOG(SLIPPI_ONLINE, "Connection cleanup started...");
 
 	// Handle destructors in a separate thread to not block the main thread
+	peppyCleanupBusy.store(true);
 	std::thread cleanup(doConnectionCleanup, std::move(matchmaking), std::move(slippi_netplay));
 	cleanup.detach();
 
