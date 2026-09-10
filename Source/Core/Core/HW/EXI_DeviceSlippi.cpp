@@ -1553,6 +1553,38 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	return false;
 }
 
+// Peppy: Slippi already solves this problem for itself. Mirror mode watches a
+// live game through a replay stream, falls behind, and overclocks the emulated
+// CPU to catch up - SlippiPlaybackStatus::setHardFFW, 4x. A watcher has exactly
+// that problem, so it pulls exactly that lever: the frame-advance signal on its
+// own tops out at double speed, which will not close a minute in any reasonable
+// time.
+static void PeppyCatchUpSpeed(bool fast)
+{
+	static bool applied = false;
+	static bool prevEnable = false;
+	static float prevFactor = 1.0f;
+
+	if (fast == applied)
+		return;
+
+	if (fast)
+	{
+		prevEnable = SConfig::GetInstance().m_OCEnable;
+		prevFactor = SConfig::GetInstance().m_OCFactor;
+		SConfig::GetInstance().m_OCEnable = true;
+		SConfig::GetInstance().m_OCFactor = 4.0f;
+	}
+	else
+	{
+		SConfig::GetInstance().m_OCFactor = prevFactor;
+		SConfig::GetInstance().m_OCEnable = prevEnable;
+	}
+
+	applied = fast;
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Catch-up overclock %s", fast ? "on" : "off");
+}
+
 bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 {
 	// A watcher has no opponent to stay level with - it chases the timeline. It
@@ -1562,12 +1594,14 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	if (SlippiMatchmaking::PeppyWatchActive())
 	{
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
+		PeppyCatchUpSpeed(behind > 120);
 		if (behind > 120)
-			return true; // a long way back: double speed until it closes
+			return true; // a long way back: every frame, at 4x clock
 		if (behind > 10)
 			return (frame % 2) == 0; // trailing: gain a frame every other one
 		return false;                // level: hold a small cushion and play normally
 	}
+	PeppyCatchUpSpeed(false);
 
 	// If the opponent is a bot running ahead to give us more inputs, we should
 	// just keep going at our own pace rather than trying to catch up.
