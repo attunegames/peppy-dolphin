@@ -2094,6 +2094,10 @@ void CEXISlippi::startFindMatch(u8 *payload)
 	// the room declining to pair us.
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Melee asked to search (mode %d)", (int)search.mode);
 
+	// Somebody got there before the automatic requeue did. Spend the flag rather
+	// than leave it to fire later, when it would start a search nobody asked for.
+	peppyRequeue = false;
+
 	// While we do have another condition that checks characters after being connected, it's nice to give
 	// someone an early error before they even queue so that they wont enter the queue and make someone
 	// else get force removed from queue and have to requeue
@@ -2300,11 +2304,11 @@ void CEXISlippi::prepareOnlineMatchState()
 	// Peppy: rejoin the queue after a game, without waiting to be told. Melee is
 	// back at the character select and matchmaking has been torn down, which is
 	// exactly the moment the player would otherwise have to press Start again.
-	// Not instantly: the previous connection is torn down on a detached thread and
-	// still holds our netplay port, which the new one has to bind. A second is
-	// longer than that takes and shorter than anyone reaching for the controller.
+	// Waiting on peppyCleanupBusy is what actually guarantees the port is ours -
+	// the delay below is only to let Melee settle back onto the character select,
+	// since every moment of it is a moment a Start press has nowhere to land.
 	if (peppyRequeue && matchmaking && !SlippiMatchmaking::PeppyWatchActive() && !peppyCleanupBusy.load() &&
-	    Common::Timer::GetTimeMs() - peppyRequeueAt > 1000 &&
+	    Common::Timer::GetTimeMs() - peppyRequeueAt > 250 &&
 	    matchmaking->GetMatchmakeState() == SlippiMatchmaking::ProcessState::IDLE &&
 	    lastSearch.mode == SlippiMatchmaking::OnlinePlayMode::ROOMS)
 	{
