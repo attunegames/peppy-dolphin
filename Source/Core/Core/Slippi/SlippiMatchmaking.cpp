@@ -646,6 +646,16 @@ void SlippiMatchmaking::startMatchmaking()
 
 		m_client = enet_host_create(&clientAddr, 1, 3, 0, 0);
 		retryCount++;
+
+		// Our port is pinned for the life of the process, so a new matchmaking
+		// client has to bind the very port the previous one is still holding -
+		// and that one is closed by a detached cleanup thread, whenever it gets
+		// round to it. Without a pause, all fifteen attempts happen inside the
+		// same microsecond and every one of them fails. A person pressing Start
+		// always took longer than the teardown; requeueing automatically does
+		// not, which is what turned this into "Failed to create mm client".
+		if (m_client == nullptr && PeppyCfg().ok)
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
 	if (m_client == nullptr)
