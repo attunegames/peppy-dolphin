@@ -1798,6 +1798,13 @@ std::string SlippiMatchmaking::GetPlayerName(u8 port)
 
 u8 SlippiMatchmaking::RemotePlayerCount()
 {
+	// A watcher is looking at two people play, but it was never paired with
+	// either, so its player list is empty and this returned zero. That sized the
+	// match block to a single slot: one character was written and the other kept
+	// the template default, which is why the opponent always came out as Bowser.
+	if (PeppyWatchActive())
+		return 1;
+
 	if (m_playerInfo.size() == 0)
 		return 0;
 
