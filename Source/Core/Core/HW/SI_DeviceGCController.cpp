@@ -140,7 +140,7 @@ static bool PeppyFillWatchPad(GCPadStatus *pad, int port)
 	pad->substickY = (u8)(128 + (s8)buf[5]);
 	pad->triggerLeft = buf[6];
 	pad->triggerRight = buf[7];
-	pad->isConnected = true;
+	pad->err = PAD_ERR_NONE;
 	return true;
 }
 
