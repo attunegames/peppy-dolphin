@@ -1244,6 +1244,8 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 	s32 frame = Common::swap32(&payload[0]);
 	s32 finalizedFrame = Common::swap32(&payload[4]);
 
+	SlippiMatchmaking::PeppyStillOnline();
+
 	// Peppy: a watcher's controller ports are fed from the timeline, and this is
 	// where we learn which frame to feed. Melee drives it; we never have to
 	// invent a clock.
@@ -2151,6 +2153,7 @@ void CEXISlippi::handleNameEntryLoad(u8 *payload)
 
 void CEXISlippi::prepareOnlineMatchState()
 {
+	SlippiMatchmaking::PeppyStillOnline();
 	SConfig::GetInstance().m_EmulationSpeed = 1.0f; // force 100% speed
 
 	// This match block is a VS match with P1 Red Falco vs P2 Red Bowser vs P3 Young Link vs P4 Young Link

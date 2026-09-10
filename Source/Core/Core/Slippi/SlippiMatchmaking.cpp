@@ -44,6 +44,8 @@ namespace
 std::atomic<bool> s_heartbeat(false);
 // Where the watcher's game has got to. Set by Melee as it asks for each frame.
 std::atomic<int> s_watch_frame(0);
+// Last time Melee showed any sign of still being in online mode.
+std::atomic<unsigned long long> s_online_alive(0);
 void PeppyHeartbeat(); // defined below, next to the rest of the room polling
 }
 
@@ -1154,6 +1156,19 @@ void PeppyHeartbeat()
 {
 	while (s_heartbeat)
 	{
+		// Being in a room means being in online mode, not merely having Dolphin
+		// open. Without this the heartbeat kept a player who had backed out in
+		// the queue, and the room went on pairing them.
+		u64 alive = s_online_alive.load();
+		if (alive != 0 && Common::Timer::GetTimeMs() - alive > 10000)
+		{
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Left online mode - leaving the room");
+			PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_leave",
+			          json{{"p_room", PeppyCfg().room}}.dump(), PeppyToken());
+			s_heartbeat = false;
+			break;
+		}
+
 		json body;
 		body["p_room"] = PeppyCfg().room;
 		body["p_name"] = PeppyCfg().name;
@@ -1419,6 +1434,11 @@ u16 SlippiMatchmaking::PeppyWatchStage()
 {
 	std::lock_guard<std::mutex> lk(s_selections.m);
 	return s_selections.Stage();
+}
+
+void SlippiMatchmaking::PeppyStillOnline()
+{
+	s_online_alive.store(Common::Timer::GetTimeMs());
 }
 
 s32 SlippiMatchmaking::PeppyWatchFrame()

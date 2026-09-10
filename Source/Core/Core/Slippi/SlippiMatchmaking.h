@@ -102,6 +102,11 @@ class SlippiMatchmaking
 	// The frame the watcher's game is currently on. Melee drives this - it tells
 	// us which frame it is asking about - so the cursor never has to guess at
 	// pacing, which is what makes this tractable at all.
+	// Melee polls for match state at the character select and for inputs during
+	// a game. Either means we are still in online mode; neither means the player
+	// has backed out, and the room should stop being told they are here.
+	static void PeppyStillOnline();
+
 	static s32 PeppyWatchFrame();
 	static void PeppyWatchSetFrame(s32 frame);
 	// Fills SLIPPI_PAD_FULL_SIZE bytes; false when that frame is not held.
