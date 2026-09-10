@@ -207,13 +207,29 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 			// Catch them up: the selections that started the game, then every
 			// input packet since. Reliable, because a hole here is not something
 			// a later packet can repair - this IS the backlog.
-			for (const auto *sel_src : {&m_match_selections, &m_remote_selections})
+			// Build the selections from what this client is actually using to run
+			// the match, rather than replaying whichever wire packets happened to
+			// still be lying around. Relaying stored packets meant a watcher
+			// sometimes got one player's character and never started, depending
+			// on when it arrived.
 			{
-				if (sel_src->empty())
-					continue;
-				ENetPacket *sel =
-				    enet_packet_create(sel_src->data(), sel_src->size(), ENET_PACKET_FLAG_RELIABLE);
-				enet_peer_send(peer, 0, sel);
+				SlippiPlayerSelections both[2] = {matchInfo.localPlayerSelections,
+				                                  matchInfo.remotePlayerSelections[0]};
+				both[0].playerIdx = playerIdx;
+				both[1].playerIdx = matchInfo.remotePlayerSelections[0].playerIdx;
+
+				for (auto &sel : both)
+				{
+					if (!sel.isCharacterSelected)
+						continue;
+					sf::Packet spac;
+					writeToPacket(spac, sel);
+					ENetPacket *sp =
+					    enet_packet_create(spac.getData(), spac.getDataSize(), ENET_PACKET_FLAG_RELIABLE);
+					enet_peer_send(peer, 0, sp);
+					WARN_LOG(SLIPPI_ONLINE, "[Peppy] Sent watcher selections for player %d: char %d stage %d",
+					         sel.playerIdx, sel.characterId, sel.stageId);
+				}
 			}
 			for (const auto &pkt : m_game_history)
 			{
