@@ -3557,6 +3557,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 		switch (byte)
 		{
 		case CMD_RECEIVE_GAME_END:
+			// Peppy: stop offering this game to anyone who attaches next.
+			if (slippi_netplay)
+				slippi_netplay->PeppyEndGame();
 			writeToFileAsync(&memPtr[bufLoc], payloadLen + 1, "close");
 			m_slippiserver->write(&memPtr[bufLoc], payloadLen + 1);
 			m_slippiserver->endGame();
