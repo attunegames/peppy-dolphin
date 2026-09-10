@@ -910,6 +910,12 @@ struct PeppyTimeline
 		}
 	}
 
+	s32 HighFrame()
+	{
+		std::lock_guard<std::mutex> lk(m);
+		return any ? high : 0;
+	}
+
 	s32 CompleteHigh()
 	{
 		std::lock_guard<std::mutex> lk(m);
@@ -1078,6 +1084,10 @@ std::atomic<bool> s_watching(false);
 // playing what it holds and stops when it runs out.
 std::atomic<bool> s_draining(false);
 
+// A new game has started and the match currently on screen belongs to the last
+// one. Ends the watcher's match so a fresh one starts on the new timeline.
+std::atomic<bool> s_restart(false);
+
 void PeppyWatch(std::string endpoint)
 {
 	auto colon = endpoint.find(':');
@@ -1109,6 +1119,7 @@ void PeppyWatch(std::string endpoint)
 	}
 
 	s_draining = false;
+	s_restart = false;
 	s_timeline.Reset();
 	s_selections.Reset();
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching %s", endpoint.c_str());
@@ -1179,6 +1190,24 @@ void PeppyWatch(std::string endpoint)
 		{
 			s32 frame = (s32)((d[1] << 24) | (d[2] << 16) | (d[3] << 8) | d[4]);
 			packets++;
+
+			// A new game announces itself as a frame number far below where we
+			// are. Nothing else moves backwards by more than the handful of
+			// frames a pad packet's backlog carries, so the threshold is not
+			// ambiguous - and without this the watcher kept playing the previous
+			// game forever, merging the new one into the old timeline at frame
+			// numbers it had already gone past.
+			if (frame < s_timeline.HighFrame() - 300)
+			{
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] New game at frame %d (was %d) - restarting watch", frame,
+				         s_timeline.HighFrame());
+				s_timeline.Reset();
+				s_restart = true;
+				lastFrame = -1;
+				gaps = 0;
+				packets = 1;
+				catchingUp = true;
+			}
 
 			// Assemble it into a per-frame timeline. This is the thing a
 			// simulation would consume; counting packets only ever told us the
@@ -1541,6 +1570,16 @@ u16 SlippiMatchmaking::PeppyWatchStage()
 {
 	std::lock_guard<std::mutex> lk(s_selections.m);
 	return s_selections.Stage();
+}
+
+bool SlippiMatchmaking::PeppyWatchRestartPending()
+{
+	return s_restart.load();
+}
+
+void SlippiMatchmaking::PeppyWatchClearRestart()
+{
+	s_restart = false;
 }
 
 u32 SlippiMatchmaking::PeppyWatchRngOffset()
