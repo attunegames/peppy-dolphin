@@ -1092,6 +1092,17 @@ std::atomic<bool> s_restart(false);
 // nothing left to finish, however many frames it is still holding.
 std::atomic<u64> s_last_frame_at(0);
 
+// Ending a watch has to clear what it was watching.
+//
+// The character select forks on the connection state we report, and while a
+// watcher looks ready we report CONNECTION_SUCCESS - which sends a Start press
+// down Melee's "lock in" path instead of its "search" path, where it waits for
+// two players who do not exist. Leaving the finished match's selections and
+// timeline lying around kept us looking ready at a character select where the
+// player was trying to search, which is why Start did nothing until somebody
+// else's search ended the watch for them.
+void PeppyWatchStop();
+
 // What the simulation is actually being fed. Three separate theories about why a
 // watcher showed no inputs have now been wrong, so this counts it rather than
 // reasoning about it: whether the frame was found at all, and whether what was
@@ -1104,6 +1115,15 @@ std::atomic<bool> s_watched_match(false);
 std::atomic<int> s_pad_hit[4];
 std::atomic<int> s_pad_miss[4];
 std::atomic<int> s_pad_live[4];
+
+void PeppyWatchStop()
+{
+	s_watching = false;
+	s_draining = false;
+	s_restart = false;
+	s_timeline.Reset();
+	s_selections.Reset();
+}
 
 void PeppyWatch(std::string endpoint)
 {
@@ -1414,8 +1434,7 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	// not press Start until their opponent did.
 	if (s_watching.load())
 	{
-		s_watching = false;
-		s_draining = false;
+		PeppyWatchStop();
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Paired up - leaving watch mode");
 	}
 
@@ -1663,8 +1682,7 @@ void SlippiMatchmaking::PeppyStillOnline()
 		if (last == 0 || now - last > 2000)
 		{
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Nothing is playing out the rest - ending watch");
-			s_draining = false;
-			s_watching = false;
+			PeppyWatchStop();
 		}
 	}
 }
@@ -1683,8 +1701,7 @@ void SlippiMatchmaking::PeppyWatchSetFrame(s32 frame)
 	// that a finished stream has been played out to its end.
 	if (s_draining.load() && frame >= PeppyWatchLatestFrame())
 	{
-		s_draining = false;
-		s_watching = false;
+		PeppyWatchStop();
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch finished at frame %d", frame);
 	}
 }
