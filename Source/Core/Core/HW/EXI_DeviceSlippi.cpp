@@ -2239,6 +2239,9 @@ void CEXISlippi::prepareOnlineMatchState()
 		localSelections.playerIdx = 0;
 		localSelections.stageId = SlippiMatchmaking::PeppyWatchStage();
 		localSelections.isStageSelected = true;
+		// Same seed the players ran with. Without it the watcher rolls its own and
+		// anything random - hazards, item spawns, tumble - happens differently.
+		localSelections.rngOffset = SlippiMatchmaking::PeppyWatchRngOffset();
 
 		SlippiPlayerSelections remote;
 		remote.characterId = SlippiMatchmaking::PeppyWatchCharacter(1);
@@ -2247,6 +2250,7 @@ void CEXISlippi::prepareOnlineMatchState()
 		remote.playerIdx = 1;
 		remote.stageId = SlippiMatchmaking::PeppyWatchStage();
 		remote.isStageSelected = true;
+		remote.rngOffset = SlippiMatchmaking::PeppyWatchRngOffset();
 		slippi_netplay->SetMatchSelections(localSelections);
 		slippi_netplay->PeppySetRemoteSelections(remote);
 

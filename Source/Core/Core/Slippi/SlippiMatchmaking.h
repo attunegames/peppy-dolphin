@@ -98,6 +98,7 @@ class SlippiMatchmaking
 	static u8 PeppyWatchCharacter(u8 idx);
 	static u8 PeppyWatchColour(u8 idx);
 	static u16 PeppyWatchStage();
+	static u32 PeppyWatchRngOffset(); // the host's, the one the match ran with
 	static s32 PeppyWatchLatestFrame();
 	// The frame the watcher's game is currently on. Melee drives this - it tells
 	// us which frame it is asking about - so the cursor never has to guess at
