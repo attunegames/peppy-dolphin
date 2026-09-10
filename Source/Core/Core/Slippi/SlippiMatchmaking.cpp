@@ -468,7 +468,7 @@ std::string PeppyIpOf(const std::string &endpoint)
 // nothing that a native version would have to undo later.
 //
 // Typed, so each update replaces the last instead of stacking up.
-void PeppyShowRoom(const json &resp)
+void PeppyShowRoom(const json &resp, u32 ms = 4000)
 {
 	std::stringstream out;
 	out << "ROOM " << resp.value("room", "?");
@@ -503,7 +503,7 @@ void PeppyShowRoom(const json &resp)
 		out << "\nqueue: " << waiting << (waiting == 1 ? " waiting" : " waiting");
 	}
 
-	OSD::AddTypedMessage(OSD::MessageType::PeppyRoom, out.str(), 4000, OSD::Color::CYAN);
+	OSD::AddTypedMessage(OSD::MessageType::PeppyRoom, out.str(), ms, OSD::Color::CYAN);
 }
 } // namespace
 
@@ -1286,7 +1286,23 @@ void PeppyHeartbeat()
 		// matches is how the loser kept re-pairing with the winner the instant a
 		// game ended, skipping whoever was actually next in the queue.
 		body["p_presence_only"] = true;
-		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
+		std::string raw = PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
+
+		// Keep the panel honest while nobody is searching. Only a searching
+		// client polls pd_tick, so without this every screen in the room froze on
+		// the last thing it was told - a finished match still billed as "next up"
+		// reads as a rotation bug and is only a stale caption. Shown for longer
+		// than the interval so it does not blink out between beats.
+		try
+		{
+			json resp = json::parse(raw);
+			if (resp.contains("active"))
+				PeppyShowRoom(resp, 11000);
+		}
+		catch (...)
+		{
+		}
+
 		for (int i = 0; i < 20 && s_heartbeat; i++)
 			std::this_thread::sleep_for(std::chrono::milliseconds(500));
 	}
