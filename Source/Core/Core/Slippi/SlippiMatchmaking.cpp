@@ -613,7 +613,13 @@ void SlippiMatchmaking::startMatchmaking()
 
 	retryCount = 0;
 	auto userInfo = m_user->GetUserInfo();
-	while (m_client == nullptr && retryCount < 15)
+	// Five seconds of trying on our own port, against fifteen quick attempts on a
+	// random one. Ours cannot simply be moved when it is busy - the whole reason
+	// it is pinned is that a moving port is what stopped players connecting - so
+	// when it is held by a socket that is on its way out, waiting is the only
+	// thing that helps.
+	const int maxRetries = PeppyCfg().ok ? 50 : 15;
+	while (m_client == nullptr && retryCount < maxRetries)
 	{
 		bool customPort = SConfig::GetInstance().m_slippiForceNetplayPort;
 
