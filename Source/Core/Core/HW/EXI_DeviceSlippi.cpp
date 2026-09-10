@@ -1233,6 +1233,13 @@ bool CEXISlippi::isDisconnected()
 	if (!slippi_netplay)
 		return true;
 
+	// A watcher has no connection to lose - its match arrives as a timeline that
+	// is already in hand. Judging it by connection status ended the game on the
+	// first frame, because the stand-in client is constructed "failed": the
+	// characters and stage loaded correctly and then it immediately quit.
+	if (SlippiMatchmaking::PeppyWatchActive())
+		return false;
+
 	auto status = slippi_netplay->GetSlippiConnectStatus();
 	return status != SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED;
 }
@@ -1317,8 +1324,10 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 	bool shouldSkip = shouldSkipOnlineFrame(frame, finalizedFrame);
 	if (shouldSkip)
 	{
-		// Send inputs that have not yet been acked
-		slippi_netplay->SendSlippiPad(nullptr);
+		// Send inputs that have not yet been acked. A watcher has nobody to send
+		// to; it skips purely to wait for inputs it has not received yet.
+		if (!SlippiMatchmaking::PeppyWatchActive())
+			slippi_netplay->SendSlippiPad(nullptr);
 	}
 	else
 	{
@@ -1430,6 +1439,14 @@ void CEXISlippi::handlePoorMatchPerformance(s32 frame)
 
 bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 {
+	// A watcher waits on its timeline exactly the way a player waits on an
+	// opponent: if this frame's inputs have not arrived, skip and ask again.
+	// That is what holds it in step with the live match. During catch-up the
+	// timeline is thousands of frames ahead, nothing skips, and it runs as fast
+	// as the emulator will go until it draws level.
+	if (SlippiMatchmaking::PeppyWatchActive())
+		return SlippiMatchmaking::PeppyWatchLatestFrame() < frame - ROLLBACK_MAX_FRAMES;
+
 	auto status = slippi_netplay->GetSlippiConnectStatus();
 	bool connectionFailed = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_FAILED;
 	bool connectionDisconnected = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_DISCONNECTED;
