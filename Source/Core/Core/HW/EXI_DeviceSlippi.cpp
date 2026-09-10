@@ -2279,6 +2279,24 @@ void CEXISlippi::prepareOnlineMatchState()
 	}
 #endif
 
+	// Peppy: a finished watch leaves this client in a state Melee cannot resolve.
+	// The matchmaking search is still running, so the character select shows
+	// "Press Z to cancel" and refuses Start - but the watch match ran on made-up
+	// selections and cleared the lock-in on its way out, so Melee also thinks no
+	// character was ever locked. The spectator then looks stuck until somebody
+	// else's search happens to shake it loose.
+	//
+	// Put them back to a clean idle instead. Their place in the queue is held by
+	// the room, not by this session, so nothing is lost by dropping it.
+	if (SlippiMatchmaking::PeppyWatchMatchLatched() && !SlippiMatchmaking::PeppyWatchActive())
+	{
+		SlippiMatchmaking::PeppyWatchSetMatchLatch(false);
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch over - back to the character select");
+		handleConnectionCleanup();
+		prepareOnlineMatchState();
+		return;
+	}
+
 	// Peppy: a watcher has no opponent and never sat at a character select, but
 	// it does hold the whole match. Rather than branching through the match block
 	// logic below, present it as a player who has chosen and an opponent who has
