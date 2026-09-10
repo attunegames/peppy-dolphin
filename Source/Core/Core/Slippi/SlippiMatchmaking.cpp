@@ -457,6 +457,18 @@ bool PeppyStun(ENetSocket sock, std::string &out)
 	return false;
 }
 
+// A crown per room cleared, shown as stars after the name. The OSD font is not
+// worth gambling on for a real crown glyph, and a star after a name reads as an
+// achievement without needing a legend.
+std::string PeppyCrowned(const json &member)
+{
+	std::string name = member.value("name", "?");
+	int crowns = member.value("crowns", 0);
+	if (crowns > 0)
+		name += " " + std::string(crowns > 3 ? 3 : crowns, '*');
+	return name;
+}
+
 std::string PeppyIpOf(const std::string &endpoint)
 {
 	auto colon = endpoint.find(':');
@@ -480,8 +492,8 @@ void PeppyShowRoom(const json &resp, u32 ms = 4000)
 		// long before either locks in - so the room cannot honestly say a game is
 		// being played. The one client that knows is the one receiving its
 		// frames, and that is this one when it is watching.
-		out << (SlippiMatchmaking::PeppyWatchActive() ? " - playing: " : " - up next: ") << (*active)[0].value("name", "?") << " vs "
-		    << (*active)[1].value("name", "?");
+		out << (SlippiMatchmaking::PeppyWatchActive() ? " - playing: " : " - up next: ") << PeppyCrowned((*active)[0])
+		    << " vs " << PeppyCrowned((*active)[1]);
 	}
 	else
 		out << " - no match yet";
@@ -1591,8 +1603,27 @@ void SlippiMatchmaking::PeppyReportResult(const std::string &matchId, bool iWon)
 		body["p_room"] = PeppyCfg().room;
 		body["p_match_id"] = matchId;
 		body["p_i_won"] = iWon;
-		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_result", body.dump(), PeppyToken());
+		std::string raw = PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_result", body.dump(), PeppyToken());
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Reported %s for %s", iWon ? "a win" : "a loss", matchId.c_str());
+
+		// Beating everyone in the room is worth saying out loud, and everyone in
+		// the room finds out at the same time because they all report the result.
+		try
+		{
+			json resp = json::parse(raw);
+			if (resp.value("crowned", false))
+			{
+				std::string champ = resp.value("champion", "");
+				WARN_LOG(SLIPPI_ONLINE, "[Peppy] %s beat the room - crown, and to the back of the queue",
+				         champ.c_str());
+				OSD::AddTypedMessage(OSD::MessageType::PeppyRoom,
+				                     champ + " beat the room - crown earned, back of the queue", 8000,
+				                     OSD::Color::YELLOW);
+			}
+		}
+		catch (...)
+		{
+		}
 	}).detach();
 }
 
