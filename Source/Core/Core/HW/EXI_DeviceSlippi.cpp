@@ -10,6 +10,7 @@
 #include <SlippiLib/SlippiGame.h>
 
 #include <semver/include/semver200.h>
+#include <sstream>
 #include <utility> // std::move
 
 #include "Common/CommonPaths.h"
@@ -1634,6 +1635,18 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	{
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
 		PeppyCatchUpSpeed(behind > 10);
+
+		// Say what is happening, since it cannot be hidden. Melee draws every frame
+		// it simulates and the response code that would stop it does not exist in
+		// the online path - so a watcher catching up looks like a game running at
+		// four times speed for no reason. A caption turns that from "something is
+		// wrong" into "it is fetching what you missed".
+		if (behind > 10 && (frame % 30) == 0)
+		{
+			std::stringstream msg;
+			msg << "Catching up to the live match - " << (behind / 60) << "s behind";
+			OSD::AddTypedMessage(OSD::MessageType::PeppyWatch, msg.str(), 1500, OSD::Color::YELLOW);
+		}
 
 		if ((frame % 60) == 0)
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s | pads: %s", frame,
