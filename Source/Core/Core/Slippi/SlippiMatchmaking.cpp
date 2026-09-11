@@ -1141,6 +1141,12 @@ void PeppyWatchStop();
 // finishing - is precisely when the stream has already stopped.
 std::atomic<bool> s_watched_match(false);
 
+// Addresses of people trying to watch us, so we can open a hole for them. Our
+// router drops an unsolicited packet from a third address; a few bytes sent
+// their way is all it takes to stop that.
+std::mutex s_punch_m;
+std::vector<std::string> s_punch;
+
 std::atomic<int> s_pad_hit[4];
 std::atomic<int> s_pad_miss[4];
 std::atomic<int> s_pad_live[4];
@@ -1171,6 +1177,34 @@ void PeppyWatch(std::string endpoint)
 		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Watcher could not create host");
 		s_watching = false;
 		return;
+	}
+
+	// Tell the room where to find us before we start dialling.
+	//
+	// Our connection reaches the player's router as an unsolicited packet from an
+	// address it has never sent to, and a router's whole job is to drop those. So
+	// the players need to knock on our door first - and to do that they need this
+	// address, which only a STUN reply can tell us, and only for this socket.
+	// It must happen before the connect: once ENet owns the socket, a stray STUN
+	// reply arriving on it is just a malformed packet.
+	{
+		std::string watchExternal;
+		if (PeppyStun(client->socket, watchExternal))
+		{
+			json body;
+			body["p_room"] = PeppyCfg().room;
+			body["p_name"] = PeppyCfg().name;
+			body["p_code"] = PeppyCfg().code;
+			body["p_presence_only"] = true; // saying where we are, not asking for a game
+			body["p_watch_external"] = watchExternal;
+			PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching from %s - told the room so the players can let us in",
+			         watchExternal.c_str());
+		}
+		else
+		{
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] No STUN answer for the watch socket - same-network only");
+		}
 	}
 
 	ENetAddress addr;
@@ -1364,6 +1398,13 @@ void PeppyHeartbeat()
 			json resp = json::parse(raw);
 			if (resp.find("active") != resp.end())
 				PeppyShowRoom(resp, 11000);
+
+			// The heartbeat is the only thing still talking to the room during a
+			// match, so it is what keeps the punch list current for spectators
+			// who turn up after the first whistle.
+			auto punch = resp.find("punch");
+			if (punch != resp.end())
+				SlippiMatchmaking::PeppySetPunchList(*punch);
 		}
 		catch (...)
 		{
@@ -1673,6 +1714,31 @@ u16 SlippiMatchmaking::PeppyWatchStage()
 {
 	std::lock_guard<std::mutex> lk(s_selections.m);
 	return s_selections.Stage();
+}
+
+void SlippiMatchmaking::PeppySetPunchList(const json &list)
+{
+	std::vector<std::string> next;
+	if (list.is_array())
+		for (const auto &entry : list)
+			if (entry.is_string())
+				next.push_back(entry.get<std::string>());
+
+	std::lock_guard<std::mutex> lk(s_punch_m);
+	s_punch.swap(next);
+}
+
+std::vector<std::string> SlippiMatchmaking::PeppyPunchList()
+{
+	std::lock_guard<std::mutex> lk(s_punch_m);
+	return s_punch;
+}
+
+// Reached from SlippiNetplay.cpp without including this header, which includes
+// that one. A free function is the cheaper way out of the circle.
+std::vector<std::string> PeppyPunchListForNetplay()
+{
+	return SlippiMatchmaking::PeppyPunchList();
 }
 
 void SlippiMatchmaking::PeppyWatchSetMatchLatch(bool watched)

@@ -99,6 +99,10 @@ class SlippiMatchmaking
 	static u8 PeppyWatchColour(u8 idx);
 	static u16 PeppyWatchStage();
 	static u32 PeppyWatchRngOffset(); // the host's, the one the match ran with
+	// Spectators we should open a hole for, and the addresses to send to.
+	static void PeppySetPunchList(const json &list);
+	static std::vector<std::string> PeppyPunchList();
+
 	static void PeppyWatchSetMatchLatch(bool watched); // this match is one we are watching
 	static bool PeppyWatchMatchLatched();
 	static std::string PeppyWatchPadReport(); // what the simulation is being fed

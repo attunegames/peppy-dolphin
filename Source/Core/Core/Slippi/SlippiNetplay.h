@@ -265,6 +265,7 @@ class SlippiNetplayClient
 	// moment the game begins.
 	std::string m_match_selections;  // ours
 	std::string m_remote_selections; // the opponent's
+	u64 m_last_punch = 0; // last time we knocked on a spectator's router
 	std::thread m_thread;
 	u8 m_remotePlayerCount = 0;
 
