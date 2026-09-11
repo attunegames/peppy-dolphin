@@ -1618,42 +1618,36 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	// starts a game that is already in progress, so being behind is the normal
 	// state and catching up is the whole job. Advancing a frame is how Melee is
 	// told to run one more than the clock would give it.
-	// A watcher NEVER advances, and this is the whole of it.
+	// Advancing is how a frame gets run without being drawn.
 	//
-	// Advancing is Melee's time-sync nudge, not a fast-forward: it moves the
-	// frame counter on and asks for the next opponent inputs without running the
-	// game. Used thousands of times to "catch up", it does not replay the match -
-	// it skips it. The watcher then arrives at the live frame holding a state
-	// that never happened: nobody damaged, the clock a minute behind, and only
-	// inputs from that moment on having any effect. Every measurement said level
-	// with complete inputs, and every one of them was describing a simulation
-	// that had been jumped over rather than played.
+	// The signal reaches ForceInputRefetchOnAdvance, which calls
+	// RenewInputs_Prefunction a second time and so makes the engine loop twice
+	// before the next render. Two frames simulated, one frame drawn - which is
+	// exactly the fast-forward a watcher wants, and it is already in the online
+	// path rather than needing a new injection.
 	//
-	// Speed comes from the throttler instead, which makes the emulator run every
-	// frame properly, just faster than real time.
+	// It has to be RATIONED. Slippi's own use is at most five times in thirty
+	// frames. Returning it on every poll turns the input refetch into a runaway:
+	// the frame counter races away, the engine never gets to loop, and the
+	// watcher lands on the live frame holding a state that was never simulated -
+	// nobody damaged, the clock minutes behind. That is what happened when this
+	// was used unbounded, and why it looked like advancing skipped the match
+	// rather than replaying it.
+	//
+	// One in two while catching up: double speed with half the frames never
+	// drawn, on top of the throttler being off.
 	if (SlippiMatchmaking::PeppyWatchActive())
 	{
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
 		PeppyCatchUpSpeed(behind > 10);
-
-		// Say what is happening, since it cannot be hidden. Melee draws every frame
-		// it simulates and the response code that would stop it does not exist in
-		// the online path - so a watcher catching up looks like a game running at
-		// four times speed for no reason. A caption turns that from "something is
-		// wrong" into "it is fetching what you missed".
-		if (behind > 10 && (frame % 30) == 0)
-		{
-			std::stringstream msg;
-			msg << "Catching up to the live match - " << (behind / 60) << "s behind";
-			OSD::AddTypedMessage(OSD::MessageType::PeppyWatch, msg.str(), 1500, OSD::Color::YELLOW);
-		}
+		bool catchingUp = behind > 10 && (frame % 2) == 0;
 
 		if ((frame % 60) == 0)
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s | pads: %s", frame,
 			         SlippiMatchmaking::PeppyWatchLatestFrame(), behind, behind > 10 ? "catching up" : "level",
 			         SlippiMatchmaking::PeppyWatchPadReport().c_str());
 
-		return false;
+		return catchingUp;
 	}
 	PeppyCatchUpSpeed(false);
 
