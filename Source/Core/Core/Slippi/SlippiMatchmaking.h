@@ -117,6 +117,11 @@ class SlippiMatchmaking
 	// has backed out, and the room should stop being told they are here.
 	static void PeppyStillOnline();
 
+	// Make a room from inside Melee's menus and hold on to it. mode indexes the
+	// Rooms list - 0 Singles, 1 Doubles, 2 IronMan, 3 Crew Battles, 4
+	// Tournaments - and an unlisted room gets a passcode minted with it.
+	static void PeppyCreateRoom(u8 mode, bool listed);
+
 	static s32 PeppyWatchFrame();
 	static void PeppyWatchSetFrame(s32 frame);
 	// Fills SLIPPI_PAD_FULL_SIZE bytes; false when that frame is not held.

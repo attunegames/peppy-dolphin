@@ -3816,6 +3816,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 		case CMD_PREMADE_TEXT_LOAD:
 			preparePremadeTextLoad(&memPtr[bufLoc + 1]);
 			break;
+		case CMD_PEPPY_CREATE_ROOM:
+			SlippiMatchmaking::PeppyCreateRoom(memPtr[bufLoc + 1], memPtr[bufLoc + 2] != 0);
+			break;
 		case CMD_OPEN_LOGIN:
 			handleLogInRequest();
 			break;
