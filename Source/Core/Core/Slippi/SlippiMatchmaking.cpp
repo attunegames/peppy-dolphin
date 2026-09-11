@@ -1410,7 +1410,12 @@ void PeppyHeartbeat()
 		{
 		}
 
-		for (int i = 0; i < 20 && s_heartbeat; i++)
+		// Ten seconds was fine when this only had to say "still here". It now also
+		// carries the list of spectators to punch a hole for, and a spectator's
+		// connection attempt gives up long before ten seconds - so their first
+		// try would always fail and only a later retry would land. Five keeps
+		// that wait short without making much noise.
+		for (int i = 0; i < 10 && s_heartbeat; i++)
 			std::this_thread::sleep_for(std::chrono::milliseconds(500));
 	}
 }
