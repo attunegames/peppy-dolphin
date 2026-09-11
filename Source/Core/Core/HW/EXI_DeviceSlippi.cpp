@@ -1640,14 +1640,16 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	{
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
 		PeppyCatchUpSpeed(behind > 10);
-		bool catchingUp = behind > 10 && (frame % 2) == 0;
 
 		if ((frame % 60) == 0)
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s | pads: %s", frame,
 			         SlippiMatchmaking::PeppyWatchLatestFrame(), behind, behind > 10 ? "catching up" : "level",
 			         SlippiMatchmaking::PeppyWatchPadReport().c_str());
 
-		return catchingUp;
+		// Catching up is not this signal's job any more - it is a separate response
+		// code that makes Melee run several frames per render, so the frames in
+		// between are simulated and never drawn.
+		return false;
 	}
 	PeppyCatchUpSpeed(false);
 
@@ -1842,6 +1844,14 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	else if (state != SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED)
 	{
 		frameResult = 3; // Indicates we have disconnected
+	}
+	else if (watching && SlippiMatchmaking::PeppyWatchLatestFrame() - frame > 10)
+	{
+		// Tell Melee to bury this frame. ForceEngineOnRollback reads this and
+		// raises the engine loop count, so several frames are simulated for one
+		// frame drawn - the catch-up happens behind whatever is already on
+		// screen instead of being played out in front of the viewer.
+		frameResult = 5;
 	}
 	else if (shouldAdvanceOnlineFrame(frame))
 	{
