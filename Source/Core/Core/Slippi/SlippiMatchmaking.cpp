@@ -1856,7 +1856,11 @@ void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
 		json j = json::parse(resp);
 		if (j.value("state", "") != "ok")
 		{
-			ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room refused: %s", j.value("error", "?").c_str());
+			// Log what came back rather than just our own field. A missing
+			// migration answers with PostgREST's own error shape, which has
+			// neither 'state' nor 'error' in it - and "refused: ?" tells you
+			// nothing about why.
+			ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room refused: %s", resp.substr(0, 300).c_str());
 			return;
 		}
 		code = j.value("code", "");
@@ -1869,7 +1873,8 @@ void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
 	}
 	catch (...)
 	{
-		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room reply could not be read");
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room reply could not be read: %s",
+		          resp.substr(0, 300).c_str());
 		return;
 	}
 
