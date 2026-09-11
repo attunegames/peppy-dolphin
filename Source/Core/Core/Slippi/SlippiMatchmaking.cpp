@@ -1861,9 +1861,11 @@ void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
 		}
 		code = j.value("code", "");
 		// Public rooms come back with passcode null rather than absent, and
-		// value() only substitutes for a missing key.
-		if (j.contains("passcode") && j["passcode"].is_string())
-			pass = j["passcode"].get<std::string>();
+		// value() only substitutes for a missing key. find() rather than
+		// contains(), which this copy of nlohmann is too old for.
+		auto pc = j.find("passcode");
+		if (pc != j.end() && pc->is_string())
+			pass = pc->get<std::string>();
 	}
 	catch (...)
 	{
