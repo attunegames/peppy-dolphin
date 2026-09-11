@@ -307,6 +307,40 @@ const PeppyConfig &PeppyCfg()
 	return cfg;
 }
 
+// The room Melee asked for, which outranks whatever peppy.json said. That is how
+// a room made from the menus beats one the launcher set up, and it means the
+// launcher does not have to know anything about rooms made in-game.
+struct PeppyActiveRoom
+{
+	std::string code, passcode, mode;
+};
+
+PeppyActiveRoom &PeppyActive()
+{
+	static PeppyActiveRoom room;
+	return room;
+}
+
+std::mutex &PeppyActiveLock()
+{
+	static std::mutex m;
+	return m;
+}
+
+std::string PeppyRoom()
+{
+	std::lock_guard<std::mutex> lk(PeppyActiveLock());
+	return PeppyActive().code.empty() ? PeppyRoom() : PeppyActive().code;
+}
+
+// Peppy is driving this launch if it can reach Supabase and knows a room, from
+// either source. The config alone used to decide this, back when a room could
+// only ever come from the launcher.
+bool PeppyReady()
+{
+	return !PeppyCfg().url.empty() && !PeppyCfg().key.empty() && !PeppyRoom().empty();
+}
+
 size_t PeppyCurlWrite(char *ptr, size_t size, size_t nmemb, void *out)
 {
 	static_cast<std::string *>(out)->append(ptr, size * nmemb);
@@ -618,14 +652,14 @@ void SlippiMatchmaking::startMatchmaking()
 	// it is pinned is that a moving port is what stopped players connecting - so
 	// when it is held by a socket that is on its way out, waiting is the only
 	// thing that helps.
-	const int maxRetries = PeppyCfg().ok ? 50 : 15;
+	const int maxRetries = PeppyReady() ? 50 : 15;
 	while (m_client == nullptr && retryCount < maxRetries)
 	{
 		bool customPort = SConfig::GetInstance().m_slippiForceNetplayPort;
 
 		if (customPort)
 			m_hostPort = SConfig::GetInstance().m_slippiNetplayPort;
-		else if (PeppyCfg().ok)
+		else if (PeppyReady())
 		{
 			// The port must not move between attempts. A fresh one on every retry
 			// means both players end up dialling an address the other has already
@@ -660,7 +694,7 @@ void SlippiMatchmaking::startMatchmaking()
 		// same microsecond and every one of them fails. A person pressing Start
 		// always took longer than the teardown; requeueing automatically does
 		// not, which is what turned this into "Failed to create mm client".
-		if (m_client == nullptr && PeppyCfg().ok)
+		if (m_client == nullptr && PeppyReady())
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
@@ -677,7 +711,7 @@ void SlippiMatchmaking::startMatchmaking()
 	// we needed from this step - no connection to Slippi's server is made, and
 	// the hole gets punched by a STUN request from that same socket once there
 	// is actually somebody to play.
-	if (PeppyCfg().ok && m_searchSettings.mode == OnlinePlayMode::ROOMS)
+	if (PeppyReady() && m_searchSettings.mode == OnlinePlayMode::ROOMS)
 	{
 		if (!PeppySignIn())
 		{
@@ -692,7 +726,7 @@ void SlippiMatchmaking::startMatchmaking()
 		// opponent at a socket that no longer exists. Clear it on the way in so
 		// nothing can pair until we have measured the port we are actually on.
 		json reset;
-		reset["p_room"] = PeppyCfg().room;
+		reset["p_room"] = PeppyRoom();
 		reset["p_name"] = PeppyCfg().name;
 		reset["p_code"] = PeppyCfg().code;
 		reset["p_reset"] = true;
@@ -701,7 +735,7 @@ void SlippiMatchmaking::startMatchmaking()
 		if (!s_heartbeat.exchange(true))
 			std::thread(PeppyHeartbeat).detach();
 
-		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Joined room '%s' as %s on port %d", PeppyCfg().room.c_str(),
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Joined room '%s' as %s on port %d", PeppyRoom().c_str(),
 		         PeppyCfg().code.c_str(), m_hostPort);
 		m_state = ProcessState::MATCHMAKING;
 		return;
@@ -1192,7 +1226,7 @@ void PeppyWatch(std::string endpoint)
 		if (PeppyStun(client->socket, watchExternal))
 		{
 			json body;
-			body["p_room"] = PeppyCfg().room;
+			body["p_room"] = PeppyRoom();
 			body["p_name"] = PeppyCfg().name;
 			body["p_code"] = PeppyCfg().code;
 			body["p_presence_only"] = true; // saying where we are, not asking for a game
@@ -1373,13 +1407,13 @@ void PeppyHeartbeat()
 		{
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Left online mode - leaving the room");
 			PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_leave",
-			          json{{"p_room", PeppyCfg().room}}.dump(), PeppyToken());
+			          json{{"p_room", PeppyRoom()}}.dump(), PeppyToken());
 			s_heartbeat = false;
 			break;
 		}
 
 		json body;
-		body["p_room"] = PeppyCfg().room;
+		body["p_room"] = PeppyRoom();
 		body["p_name"] = PeppyCfg().name;
 		body["p_code"] = PeppyCfg().code;
 		// Presence only. pd_tick also pairs people, and a heartbeat arranging
@@ -1629,11 +1663,11 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 // interrupting a set when somebody is there to take the loser's place.
 bool SlippiMatchmaking::PeppyShouldRotate()
 {
-	if (!PeppyCfg().ok)
+	if (!PeppyReady())
 		return false;
 
 	json body;
-	body["p_room"] = PeppyCfg().room;
+	body["p_room"] = PeppyRoom();
 	body["p_name"] = PeppyCfg().name;
 	body["p_code"] = PeppyCfg().code;
 
@@ -1657,12 +1691,12 @@ bool SlippiMatchmaking::PeppyShouldRotate()
 // room takes the first and ignores the second.
 void SlippiMatchmaking::PeppyReportResult(const std::string &matchId, bool iWon)
 {
-	if (!PeppyCfg().ok || matchId.empty())
+	if (!PeppyReady() || matchId.empty())
 		return;
 
 	std::thread([matchId, iWon]() {
 		json body;
-		body["p_room"] = PeppyCfg().room;
+		body["p_room"] = PeppyRoom();
 		body["p_match_id"] = matchId;
 		body["p_i_won"] = iWon;
 		std::string raw = PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_result", body.dump(), PeppyToken());
@@ -1783,6 +1817,81 @@ u32 SlippiMatchmaking::PeppyWatchRngOffset()
 	return s_selections.Rng();
 }
 
+// Make a room from inside Melee's menus.
+//
+// Synchronous on purpose. The call is a couple of hundred milliseconds and the
+// menu is about to animate into the character select anyway - whereas doing it
+// on a thread would race the matchmaking that starts there, which would read the
+// room before this had finished setting it.
+void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
+{
+	static const char *kModes[] = {"singles", "doubles", "ironman", "crew", "tournament"};
+	if (mode >= sizeof(kModes) / sizeof(kModes[0]))
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Create asked for mode %u, which does not exist", mode);
+		return;
+	}
+	if (PeppyCfg().url.empty() || PeppyCfg().key.empty())
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Create, but no Supabase is configured");
+		return;
+	}
+	if (!PeppySignIn())
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Create could not sign in");
+		return;
+	}
+
+	json body;
+	body["p_mode"] = kModes[mode];
+	body["p_listed"] = listed;
+	body["p_name"] = PeppyCfg().name;
+
+	std::string resp =
+	    PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_room_create", body.dump(), PeppyToken());
+
+	std::string code, pass;
+	try
+	{
+		json j = json::parse(resp);
+		if (j.value("state", "") != "ok")
+		{
+			ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room refused: %s", j.value("error", "?").c_str());
+			return;
+		}
+		code = j.value("code", "");
+		// Public rooms come back with passcode null rather than absent, and
+		// value() only substitutes for a missing key.
+		if (j.contains("passcode") && j["passcode"].is_string())
+			pass = j["passcode"].get<std::string>();
+	}
+	catch (...)
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room reply could not be read");
+		return;
+	}
+
+	if (code.empty())
+		return;
+
+	{
+		std::lock_guard<std::mutex> lk(PeppyActiveLock());
+		PeppyActive().code = code;
+		PeppyActive().passcode = pass;
+		PeppyActive().mode = kModes[mode];
+	}
+
+	// Held on screen long enough to be read out to somebody over Discord.
+	std::stringstream out;
+	out << "ROOM " << code;
+	if (!pass.empty())
+		out << "    PASSCODE " << pass;
+	OSD::AddTypedMessage(OSD::MessageType::PeppyRoom, out.str(), 20000, OSD::Color::CYAN);
+
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Made %s room '%s' for %s", listed ? "a public" : "a private",
+	         code.c_str(), kModes[mode]);
+}
+
 void SlippiMatchmaking::PeppyStillOnline()
 {
 	u64 now = Common::Timer::GetTimeMs();
@@ -1864,7 +1973,7 @@ void SlippiMatchmaking::handleMatchmaking()
 	if (m_state != ProcessState::MATCHMAKING)
 		return;
 
-	if (PeppyCfg().ok && m_searchSettings.mode == OnlinePlayMode::ROOMS)
+	if (PeppyReady() && m_searchSettings.mode == OnlinePlayMode::ROOMS)
 	{
 		handlePeppyMatchmaking();
 		return;

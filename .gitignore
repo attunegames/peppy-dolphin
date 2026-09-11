@@ -93,3 +93,8 @@ Tools/*.zs-old
 *.recipe
 
 Data/Sys/GameFiles/GALE01/install.bat
+
+# Melee's own menu file, reconstructed locally for testing. The repo ships a
+# .diff against the ISO instead - a patch is ours, the whole file is Nintendo's.
+Data/Sys/GameFiles/GALE01/*.usd
+!Data/Sys/GameFiles/GALE01/*.usd.diff

@@ -93,6 +93,10 @@ class CEXISlippi : public IEXIDevice
 		CMD_GET_PLAYER_SETTINGS = 0xC3,
 		CMD_REPORT_MATCH_STATUS_UPDATE = 0xC4,
 
+		// Peppy: rooms made from inside Melee's menus. 0xC5 up is clear of
+		// everything Slippi uses.
+		CMD_PEPPY_CREATE_ROOM = 0xC5,
+
 		// Misc
 		CMD_LOG_MESSAGE = 0xD0,
 		CMD_FILE_LENGTH = 0xD1,
@@ -180,6 +184,9 @@ class CEXISlippi : public IEXIDevice
 	    {CMD_REPORT_SET_COMPLETE, static_cast<u32>(sizeof(SlippiExiTypes::ReportSetCompletionQuery) - 1)},
 	    {CMD_GET_PLAYER_SETTINGS, 0},
 	    {CMD_REPORT_MATCH_STATUS_UPDATE, static_cast<u32>(sizeof(SlippiExiTypes::ReportMatchStatusUpdateQuery) - 1)},
+
+	    // mode byte, then listed/unlisted
+	    {CMD_PEPPY_CREATE_ROOM, 2},
 
 	    // Misc
 	    {CMD_LOG_MESSAGE, 0xFFFF}, // Variable size... will only work if by itself
