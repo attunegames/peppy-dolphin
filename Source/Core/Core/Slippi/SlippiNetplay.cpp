@@ -918,6 +918,10 @@ void SlippiNetplayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
 }
 
 // called from ---NETPLAY--- thread
+// Defined in SlippiMatchmaking.cpp. Declared rather than included: that header
+// includes this one, so including it back would be circular.
+std::vector<std::string> PeppyPunchListForNetplay();
+
 void SlippiNetplayClient::ThreadFunc()
 {
 	// Let client die 1 second before host such that after a swap, the client won't be connected to
@@ -1175,6 +1179,37 @@ void SlippiNetplayClient::ThreadFunc()
 				         peerEntry.first->address.host, peerEntry.first->address.port, peerEntry.second.playerIdx);
 				enet_peer_disconnect(peerEntry.first, m_pendingDisconnectReason.load(std::memory_order_acquire));
 				peerEntry.second.isDisconnected = true;
+			}
+		}
+
+		// Peppy: open a hole for anyone trying to watch this match.
+		//
+		// A spectator dials our address, but our router has only ever sent to our
+		// opponent, so it drops them - the same NAT problem the players had with
+		// each other, one step removed. This is the other half of the punch: they
+		// are already sending to us, and these few bytes let their packets land.
+		// Sent from the netplay socket on purpose, since that is the address and
+		// port they are dialling.
+		u64 punchNow = Common::Timer::GetTimeMs();
+		if (punchNow - m_last_punch > 1000)
+		{
+			m_last_punch = punchNow;
+			for (const auto &endpoint : PeppyPunchListForNetplay())
+			{
+				auto colon = endpoint.find(':');
+				if (colon == std::string::npos)
+					continue;
+
+				ENetAddress addr;
+				if (enet_address_set_host(&addr, endpoint.substr(0, colon).c_str()) < 0)
+					continue;
+				addr.port = (u16)atoi(endpoint.substr(colon + 1).c_str());
+
+				u8 knock = 0;
+				ENetBuffer buf;
+				buf.data = &knock;
+				buf.dataLength = sizeof(knock);
+				enet_socket_send(m_client->socket, &addr, &buf, 1);
 			}
 		}
 
