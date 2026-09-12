@@ -16,6 +16,14 @@
 
 using json = nlohmann::json;
 
+// How the room's roster is laid out for the game: the two who are paired, then
+// the queue in order, then everyone else who is in the room. The room screen
+// draws the three as separate things, so they are separate ranges rather than
+// one list the game has to pick apart.
+static const u8 PEPPY_ROSTER_ACTIVE = 2;
+static const u8 PEPPY_ROSTER_QUEUE = 6;
+static const u8 PEPPY_ROSTER_LOBBY = 6;
+
 class SlippiMatchmaking
 {
   public:
