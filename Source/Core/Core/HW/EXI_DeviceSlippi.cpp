@@ -253,7 +253,7 @@ CEXISlippi::~CEXISlippi()
 }
 
 // Peppy: two playing plus six waiting is what the character select column fits.
-static const u8 PEPPY_ROSTER_SLOTS = 8;
+static const u8 PEPPY_ROSTER_SLOTS = PEPPY_ROSTER_ACTIVE + PEPPY_ROSTER_QUEUE + PEPPY_ROSTER_LOBBY;
 static const u8 PEPPY_ROSTER_NAME_LEN = 16;
 
 void CEXISlippi::configureCommands(u8 *payload, u8 length)
@@ -3046,8 +3046,9 @@ void CEXISlippi::prepareOnlineMatchState()
 	// "Rooms Mode".
 	m_read_queue.push_back(SlippiMatchmaking::PeppyRoomModeIndex());
 
-	// The roster: the two playing, then the queue in order. Sixteen bytes each,
-	// which is more name than the column has room to draw anyway.
+	// The roster: the two playing, then the queue in order, then everyone else
+	// in the room. Sixteen bytes each, which is more name than the column has
+	// room to draw anyway.
 	for (u8 slot = 0; slot < PEPPY_ROSTER_SLOTS; slot++)
 	{
 		std::string name = ConvertStringForGame(SlippiMatchmaking::PeppyRosterName(slot),

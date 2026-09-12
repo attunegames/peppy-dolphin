@@ -523,6 +523,7 @@ struct PeppyRoster
 {
 	std::vector<std::string> active; // the two playing, or up next
 	std::vector<std::string> queue;  // everybody waiting, in order
+	std::vector<std::string> lobby;  // in the room, but not waiting for a game
 };
 
 PeppyRoster &PeppyRosterState()
@@ -548,6 +549,11 @@ void PeppyRememberRoster(const json &resp)
 	if (q != resp.end() && q->is_array())
 		for (const auto &m : *q)
 			r.queue.push_back(m.value("name", "?"));
+	// Older rooms answer without a lobby; an absent list is simply empty.
+	auto l = resp.find("lobby");
+	if (l != resp.end() && l->is_array())
+		for (const auto &m : *l)
+			r.lobby.push_back(m.value("name", "?"));
 
 	std::lock_guard<std::mutex> lk(PeppyRosterLock());
 	PeppyRosterState() = r;
@@ -1868,10 +1874,17 @@ std::string SlippiMatchmaking::PeppyRosterName(u8 slot)
 {
 	std::lock_guard<std::mutex> lk(PeppyRosterLock());
 	const PeppyRoster &r = PeppyRosterState();
-	if (slot < 2)
+	// 0-1 the two who are paired, 2-7 the queue in order, 8-13 everyone else in
+	// the room. The room screen draws them as three separate things.
+	if (slot < PEPPY_ROSTER_ACTIVE)
 		return slot < r.active.size() ? r.active[slot] : std::string();
-	size_t i = slot - 2;
-	return i < r.queue.size() ? r.queue[i] : std::string();
+	if (slot < PEPPY_ROSTER_ACTIVE + PEPPY_ROSTER_QUEUE)
+	{
+		size_t i = slot - PEPPY_ROSTER_ACTIVE;
+		return i < r.queue.size() ? r.queue[i] : std::string();
+	}
+	size_t i = slot - (PEPPY_ROSTER_ACTIVE + PEPPY_ROSTER_QUEUE);
+	return i < r.lobby.size() ? r.lobby[i] : std::string();
 }
 
 // Which list this room is for, as an index into the Rooms list: 0 Singles,
