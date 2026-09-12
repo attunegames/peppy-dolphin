@@ -330,7 +330,11 @@ std::mutex &PeppyActiveLock()
 std::string PeppyRoom()
 {
 	std::lock_guard<std::mutex> lk(PeppyActiveLock());
-	return PeppyActive().code.empty() ? PeppyRoom() : PeppyActive().code;
+	// PeppyCfg().room, not PeppyRoom() - which is this function, and called
+	// itself with its own non-recursive mutex already held every time no room had
+	// been made from the menus yet. That is every boot until somebody presses
+	// Create, and it took the launcher's own room with it.
+	return PeppyActive().code.empty() ? PeppyCfg().room : PeppyActive().code;
 }
 
 // Peppy is driving this launch if it can reach Supabase and knows a room, from
