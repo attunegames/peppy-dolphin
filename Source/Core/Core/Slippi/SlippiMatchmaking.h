@@ -129,6 +129,8 @@ class SlippiMatchmaking
 	// Rooms list - 0 Singles, 1 Doubles, 2 IronMan, 3 Crew Battles, 4
 	// Tournaments - and an unlisted room gets a passcode minted with it.
 	static void PeppyCreateRoom(u8 mode, bool listed);
+	static void PeppySetQueued(bool queued);
+	static bool PeppyQueued();
 
 	// What the character select shows. The passcode is empty unless the room is
 	// a private one.
