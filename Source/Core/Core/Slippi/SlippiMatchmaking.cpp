@@ -556,6 +556,23 @@ void PeppyRememberRoster(const json &resp)
 			r.lobby.push_back(m.value("name", "?"));
 
 	std::lock_guard<std::mutex> lk(PeppyRosterLock());
+	// Only when it changes. The room screen reads this every frame and the tick
+	// refreshes it every second and a half, so logging each one would drown the
+	// log - but "the columns are empty" and "the roster never arrived" look
+	// exactly alike from the game side, and that has cost a day already.
+	static std::string last;
+	std::string now = std::to_string(r.active.size()) + "/" +
+	                  std::to_string(r.queue.size()) + "/" +
+	                  std::to_string(r.lobby.size());
+	for (const auto &n : r.queue)
+		now += " q:" + n;
+	for (const auto &n : r.lobby)
+		now += " l:" + n;
+	if (now != last)
+	{
+		last = now;
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Roster active/queue/lobby %s", now.c_str());
+	}
 	PeppyRosterState() = r;
 }
 
@@ -1475,9 +1492,13 @@ void PeppyHeartbeat()
 		try
 		{
 			json resp = json::parse(raw);
+			// Braces, because without them the second call was never inside the
+			// test and ran on every response, error ones included.
 			if (resp.find("active") != resp.end())
+			{
 				PeppyRememberRoster(resp);
 				PeppyShowRoom(resp, 11000);
+			}
 
 			// The heartbeat is the only thing still talking to the room during a
 			// match, so it is what keeps the punch list current for spectators
@@ -1522,6 +1543,8 @@ void SlippiMatchmaking::peppySleep()
 // them out of the pairing - which is also what keeps them in the lobby list
 // rather than the queue.
 static std::atomic<bool> s_peppy_queued{false};
+// Set once a room turns out to predate p_searching. See handlePeppyMatchmaking.
+static std::atomic<bool> s_peppy_no_searching_arg{false};
 
 void SlippiMatchmaking::PeppySetQueued(bool queued)
 {
@@ -1554,7 +1577,8 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	// of the queue while they were waiting in it.
 	const bool queued = PeppyQueued();
 	body["p_presence_only"] = !queued;
-	body["p_searching"] = queued;
+	if (!s_peppy_no_searching_arg)
+		body["p_searching"] = queued;
 
 	std::string raw = PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 	json resp;
@@ -1565,6 +1589,29 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	catch (...)
 	{
 		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Bad response from room: %s", raw.c_str());
+		peppySleep();
+		return;
+	}
+
+	// A room that answers with an error answers with valid JSON, so nothing above
+	// notices: the roster comes back empty and the screen shows an empty room
+	// rather than a broken one. Say so instead, once, rather than every tick.
+	if (resp.find("state") == resp.end())
+	{
+		static std::string lastComplaint;
+		const std::string complaint = resp.value("message", raw);
+		if (complaint != lastComplaint)
+		{
+			lastComplaint = complaint;
+			ERROR_LOG(SLIPPI_ONLINE, "[Peppy] The room said no: %s", complaint.c_str());
+		}
+		// An older backend has no p_searching and PostgREST answers "no such
+		// function" for the whole call, which would take the room down with it
+		// until the migration is run. Drop the argument and carry on: the client
+		// stays in the queue the way it did before, which is worse than leaving
+		// on demand and much better than nothing working.
+		if (resp.value("code", "") == "PGRST202")
+			s_peppy_no_searching_arg = true;
 		peppySleep();
 		return;
 	}
