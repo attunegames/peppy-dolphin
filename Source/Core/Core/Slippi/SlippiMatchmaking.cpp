@@ -514,6 +514,45 @@ std::string PeppyIpOf(const std::string &endpoint)
 // nothing that a native version would have to undo later.
 //
 // Typed, so each update replaces the last instead of stacking up.
+// ---------------------------------------------------------------- roster ---
+//
+// Who is playing and who is waiting, kept so the character select can list them.
+// Every tick already carries it; it was only ever read into the corner overlay
+// and thrown away.
+struct PeppyRoster
+{
+	std::vector<std::string> active; // the two playing, or up next
+	std::vector<std::string> queue;  // everybody waiting, in order
+};
+
+PeppyRoster &PeppyRosterState()
+{
+	static PeppyRoster r;
+	return r;
+}
+
+std::mutex &PeppyRosterLock()
+{
+	static std::mutex m;
+	return m;
+}
+
+void PeppyRememberRoster(const json &resp)
+{
+	PeppyRoster r;
+	auto a = resp.find("active");
+	if (a != resp.end() && a->is_array())
+		for (const auto &m : *a)
+			r.active.push_back(m.value("name", "?"));
+	auto q = resp.find("queue");
+	if (q != resp.end() && q->is_array())
+		for (const auto &m : *q)
+			r.queue.push_back(m.value("name", "?"));
+
+	std::lock_guard<std::mutex> lk(PeppyRosterLock());
+	PeppyRosterState() = r;
+}
+
 void PeppyShowRoom(const json &resp, u32 ms = 4000)
 {
 	std::stringstream out;
@@ -1431,6 +1470,7 @@ void PeppyHeartbeat()
 		{
 			json resp = json::parse(raw);
 			if (resp.find("active") != resp.end())
+				PeppyRememberRoster(resp);
 				PeppyShowRoom(resp, 11000);
 
 			// The heartbeat is the only thing still talking to the room during a
@@ -1493,6 +1533,7 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 		return;
 	}
 
+	PeppyRememberRoster(resp);
 	PeppyShowRoom(resp);
 
 	std::string state = resp.value("state", "");
@@ -1815,6 +1856,31 @@ u32 SlippiMatchmaking::PeppyWatchRngOffset()
 {
 	std::lock_guard<std::mutex> lk(s_selections.m);
 	return s_selections.Rng();
+}
+
+// Slots 0 and 1 are the active pair, 2 up are the queue in order. Empty for a
+// slot nobody is in.
+std::string SlippiMatchmaking::PeppyRosterName(u8 slot)
+{
+	std::lock_guard<std::mutex> lk(PeppyRosterLock());
+	const PeppyRoster &r = PeppyRosterState();
+	if (slot < 2)
+		return slot < r.active.size() ? r.active[slot] : std::string();
+	size_t i = slot - 2;
+	return i < r.queue.size() ? r.queue[i] : std::string();
+}
+
+// Which list this room is for, as an index into the Rooms list: 0 Singles,
+// 1 Doubles, 2 IronMan, 3 Crew Battles, 4 Tournaments. 0xFF for a room that did
+// not come from the menus and so has no mode of its own.
+u8 SlippiMatchmaking::PeppyRoomModeIndex()
+{
+	std::lock_guard<std::mutex> lk(PeppyActiveLock());
+	static const char *kModes[] = {"singles", "doubles", "ironman", "crew", "tournament"};
+	for (u8 i = 0; i < 5; i++)
+		if (PeppyActive().mode == kModes[i])
+			return i;
+	return 0xFF;
 }
 
 std::string SlippiMatchmaking::PeppyRoomCode()
