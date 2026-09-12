@@ -257,6 +257,8 @@ static const u8 PEPPY_ROSTER_SLOTS = PEPPY_ROSTER_ACTIVE + PEPPY_ROSTER_QUEUE + 
 static const u8 PEPPY_ROSTER_NAME_LEN = 16;
 // Kept in step with MSRB_ROOM_FLAG_* in the codeset's Online.s.
 static const u8 PEPPY_ROOM_FLAG_WATCHABLE = 1;
+static const u8 PEPPY_ROOM_FLAG_BROWSING = 2;
+static const u8 PEPPY_ROOMLIST_SLOTS = 8;
 
 void CEXISlippi::configureCommands(u8 *payload, u8 length)
 {
@@ -3075,7 +3077,25 @@ void CEXISlippi::prepareOnlineMatchState()
 	u8 roomFlags = 0;
 	if (SlippiMatchmaking::PeppyWatchActive() && SlippiMatchmaking::PeppyWatchReady())
 		roomFlags |= PEPPY_ROOM_FLAG_WATCHABLE;
+	if (SlippiMatchmaking::PeppyBrowsing())
+		roomFlags |= PEPPY_ROOM_FLAG_BROWSING;
 	m_read_queue.push_back(roomFlags);
+
+	// The public rooms, as of the last fetch. Fixed slots so the screen can
+	// index them, and the count separately because an empty list and a list
+	// that has not arrived yet are different things to draw.
+	const u8 listed = SlippiMatchmaking::PeppyRoomListCount();
+	m_read_queue.push_back(listed > PEPPY_ROOMLIST_SLOTS ? PEPPY_ROOMLIST_SLOTS : listed);
+	for (u8 i = 0; i < PEPPY_ROOMLIST_SLOTS; i++)
+	{
+		std::string code = SlippiMatchmaking::PeppyRoomListCode(i);
+		code.resize(5);
+		m_read_queue.insert(m_read_queue.end(), code.begin(), code.end());
+		m_read_queue.push_back(SlippiMatchmaking::PeppyRoomListPlayers(i));
+		std::string owner = ConvertStringForGame(SlippiMatchmaking::PeppyRoomListOwner(i), 15);
+		owner.resize(16);
+		m_read_queue.insert(m_read_queue.end(), owner.begin(), owner.end());
+	}
 }
 
 u16 CEXISlippi::getRandomStage()
@@ -3871,6 +3891,17 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 			break;
 		case CMD_PEPPY_SET_QUEUED:
 			SlippiMatchmaking::PeppySetQueued(memPtr[bufLoc + 1] != 0);
+			break;
+		case CMD_PEPPY_LIST_ROOMS:
+			SlippiMatchmaking::PeppyBrowseRooms(memPtr[bufLoc + 1]);
+			break;
+		case CMD_PEPPY_JOIN_ROOM:
+		{
+			// Four characters, and Melee does not terminate them - the length is
+			// the terminator.
+			std::string code(reinterpret_cast<char *>(&memPtr[bufLoc + 2]), 4);
+			SlippiMatchmaking::PeppyJoinRoom(code, memPtr[bufLoc + 1]);
+		}
 			break;
 		case CMD_OPEN_LOGIN:
 			handleLogInRequest();

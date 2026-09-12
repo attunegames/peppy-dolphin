@@ -129,6 +129,15 @@ class SlippiMatchmaking
 	// Rooms list - 0 Singles, 1 Doubles, 2 IronMan, 3 Crew Battles, 4
 	// Tournaments - and an unlisted room gets a passcode minted with it.
 	static void PeppyCreateRoom(u8 mode, bool listed);
+
+	// The public room list, and joining one of them.
+	static void PeppyBrowseRooms(u8 mode);
+	static bool PeppyBrowsing();
+	static u8 PeppyRoomListCount();
+	static std::string PeppyRoomListCode(u8 i);
+	static std::string PeppyRoomListOwner(u8 i);
+	static u8 PeppyRoomListPlayers(u8 i);
+	static void PeppyJoinRoom(const std::string &code, u8 mode);
 	static void PeppySetQueued(bool queued);
 	static bool PeppyQueued();
 
