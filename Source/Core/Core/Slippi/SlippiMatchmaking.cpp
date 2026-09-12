@@ -792,6 +792,11 @@ void SlippiMatchmaking::startMatchmaking()
 		reset["p_name"] = PeppyCfg().name;
 		reset["p_code"] = PeppyCfg().code;
 		reset["p_reset"] = true;
+		// Walking into a room is not asking for a game. Without this the reset
+		// stamped searching_at on the way in, so entering a room put you in the
+		// queue before you had pressed anything - and the room would pair you
+		// while you were still reading it.
+		reset["p_presence_only"] = !PeppyQueued();
 		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", reset.dump(), PeppyToken());
 
 		if (!s_heartbeat.exchange(true))
