@@ -96,6 +96,7 @@ class CEXISlippi : public IEXIDevice
 		// Peppy: rooms made from inside Melee's menus. 0xC5 up is clear of
 		// everything Slippi uses.
 		CMD_PEPPY_CREATE_ROOM = 0xC5,
+		CMD_PEPPY_SET_QUEUED = 0xC6,
 
 		// Misc
 		CMD_LOG_MESSAGE = 0xD0,
@@ -187,6 +188,7 @@ class CEXISlippi : public IEXIDevice
 
 	    // mode byte, then listed/unlisted
 	    {CMD_PEPPY_CREATE_ROOM, 2},
+	    {CMD_PEPPY_SET_QUEUED, 1},
 
 	    // Misc
 	    {CMD_LOG_MESSAGE, 0xFFFF}, // Variable size... will only work if by itself

@@ -1517,6 +1517,23 @@ void SlippiMatchmaking::peppySleep()
 //            when the dial happens.
 //   ready    both endpoints are fresh. Hand Slippi the addresses and get out of
 //            the way.
+// Being in a room is not the same as wanting a game. Until somebody presses
+// Start they are present and watching, so the tick says so and pd_tick leaves
+// them out of the pairing - which is also what keeps them in the lobby list
+// rather than the queue.
+static std::atomic<bool> s_peppy_queued{false};
+
+void SlippiMatchmaking::PeppySetQueued(bool queued)
+{
+	if (s_peppy_queued.exchange(queued) != queued)
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] %s the queue", queued ? "Joined" : "Left");
+}
+
+bool SlippiMatchmaking::PeppyQueued()
+{
+	return s_peppy_queued.load();
+}
+
 void SlippiMatchmaking::handlePeppyMatchmaking()
 {
 	const PeppyConfig &cfg = PeppyCfg();
@@ -1529,6 +1546,8 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	body["p_room"] = PeppyRoom();
 	body["p_name"] = cfg.name;
 	body["p_code"] = cfg.code;
+	// Present but not asking for a game until Start is pressed.
+	body["p_presence_only"] = !PeppyQueued();
 
 	std::string raw = PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 	json resp;
