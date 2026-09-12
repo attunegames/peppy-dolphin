@@ -2169,6 +2169,14 @@ void SlippiMatchmaking::PeppyBrowseRooms(u8 mode)
 		std::lock_guard<std::mutex> lk(PeppyRoomListLock());
 		PeppyRoomListState().clear();
 	}
+	{
+		// Which list is being browsed is also which list anything found in it
+		// belongs to, and the room screen reads the mode out of the match state
+		// buffer to put a name on its header. Without this a joined room came up
+		// as a room with no game attached.
+		std::lock_guard<std::mutex> lk(PeppyActiveLock());
+		PeppyActive().mode = kModes[mode];
+	}
 	if (!s_browsing.exchange(true))
 		std::thread(PeppyRoomListThread, std::string(kModes[mode])).detach();
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Browsing %s rooms", kModes[mode]);
