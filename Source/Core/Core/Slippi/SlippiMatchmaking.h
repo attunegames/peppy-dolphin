@@ -127,6 +127,11 @@ class SlippiMatchmaking
 	static std::string PeppyRoomCode();
 	static std::string PeppyRoomPasscode();
 
+	// The room's roster for the character select: slots 0-1 are the active pair,
+	// 2 up are the queue in order.
+	static std::string PeppyRosterName(u8 slot);
+	static u8 PeppyRoomModeIndex();
+
 	static s32 PeppyWatchFrame();
 	static void PeppyWatchSetFrame(s32 frame);
 	// Fills SLIPPI_PAD_FULL_SIZE bytes; false when that frame is not held.
