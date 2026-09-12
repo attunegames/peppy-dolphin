@@ -1546,8 +1546,15 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	body["p_room"] = PeppyRoom();
 	body["p_name"] = cfg.name;
 	body["p_code"] = cfg.code;
-	// Present but not asking for a game until Start is pressed.
-	body["p_presence_only"] = !PeppyQueued();
+	// Present but not asking for a game until Start is pressed. The two say
+	// different things: presence_only means "do not pair me on this call", which
+	// is also what the heartbeats send, while p_searching is what actually puts
+	// this client in the queue or takes it out. Leaving the queue needs the
+	// second one - a heartbeat that cleared searching_at would drop people out
+	// of the queue while they were waiting in it.
+	const bool queued = PeppyQueued();
+	body["p_presence_only"] = !queued;
+	body["p_searching"] = queued;
 
 	std::string raw = PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 	json resp;
