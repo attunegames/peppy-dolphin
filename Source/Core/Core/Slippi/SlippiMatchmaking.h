@@ -122,6 +122,11 @@ class SlippiMatchmaking
 	// Tournaments - and an unlisted room gets a passcode minted with it.
 	static void PeppyCreateRoom(u8 mode, bool listed);
 
+	// What the character select shows. The passcode is empty unless the room is
+	// a private one.
+	static std::string PeppyRoomCode();
+	static std::string PeppyRoomPasscode();
+
 	static s32 PeppyWatchFrame();
 	static void PeppyWatchSetFrame(s32 frame);
 	// Fills SLIPPI_PAD_FULL_SIZE bytes; false when that frame is not held.

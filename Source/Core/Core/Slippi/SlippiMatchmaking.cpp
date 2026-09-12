@@ -1817,6 +1817,19 @@ u32 SlippiMatchmaking::PeppyWatchRngOffset()
 	return s_selections.Rng();
 }
 
+std::string SlippiMatchmaking::PeppyRoomCode()
+{
+	return PeppyRoom();
+}
+
+std::string SlippiMatchmaking::PeppyRoomPasscode()
+{
+	std::lock_guard<std::mutex> lk(PeppyActiveLock());
+	// Only a room made here has one. A room that came from peppy.json is not
+	// ours to describe as private or public.
+	return PeppyActive().code.empty() ? std::string() : PeppyActive().passcode;
+}
+
 // Make a room from inside Melee's menus.
 //
 // Synchronous on purpose. The call is a couple of hundred milliseconds and the
