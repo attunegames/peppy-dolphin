@@ -17,6 +17,12 @@
 #include "Core/NetPlayProto.h"
 #include "InputCommon/GCPadStatus.h"
 
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include "Common/FileUtil.h"
+
 // --- standard GameCube controller ---
 CSIDevice_GCController::CSIDevice_GCController(SIDevices device, int _iDeviceNumber)
 	: ISIDevice(device, _iDeviceNumber), m_TButtonComboStart(0), m_TButtonCombo(0),
@@ -116,6 +122,135 @@ int CSIDevice_GCController::RunBuffer(u8* _pBuffer, int _iLength)
 }
 
 
+// Peppy: scripted controller input, for driving the game from a test script
+// when nobody is at the keyboard.
+//
+// Inert unless User/Config/peppy-input.txt exists, so a normal build never
+// touches this. One step per line:
+//
+//     <polls> <token>[+<token>...]
+//
+// where a token is A B X Y Z L R START, a stick direction UP DOWN LEFT RIGHT,
+// or NONE. Lines starting with # are comments. Melee reads the pad once a
+// frame, so a poll is a frame; hold a direction for a few and leave a gap of
+// NONE between presses or the menu treats them as one hold.
+//
+// The script plays once and then gets out of the way, so a human can still
+// take over afterwards.
+namespace
+{
+struct PeppyScriptStep
+{
+	int polls;
+	u16 buttons;
+	u8 stick_x, stick_y;
+};
+
+std::vector<PeppyScriptStep> s_peppy_script;
+size_t s_peppy_index = 0;
+int s_peppy_remaining = 0;
+bool s_peppy_loaded = false;
+
+bool PeppyScriptToken(const std::string &tok, PeppyScriptStep *step)
+{
+	if (tok == "NONE") return true;
+	if (tok == "A") { step->buttons |= PAD_BUTTON_A; return true; }
+	if (tok == "B") { step->buttons |= PAD_BUTTON_B; return true; }
+	if (tok == "X") { step->buttons |= PAD_BUTTON_X; return true; }
+	if (tok == "Y") { step->buttons |= PAD_BUTTON_Y; return true; }
+	if (tok == "Z") { step->buttons |= PAD_TRIGGER_Z; return true; }
+	if (tok == "L") { step->buttons |= PAD_TRIGGER_L; return true; }
+	if (tok == "R") { step->buttons |= PAD_TRIGGER_R; return true; }
+	if (tok == "START") { step->buttons |= PAD_BUTTON_START; return true; }
+	// Menus follow the control stick, not the d-pad.
+	if (tok == "UP") { step->stick_y = 255; return true; }
+	if (tok == "DOWN") { step->stick_y = 0; return true; }
+	if (tok == "LEFT") { step->stick_x = 0; return true; }
+	if (tok == "RIGHT") { step->stick_x = 255; return true; }
+	return false;
+}
+
+void PeppyLoadScript()
+{
+	s_peppy_loaded = true;
+
+	const std::string path = File::GetUserPath(D_CONFIG_IDX) + "peppy-input.txt";
+	std::ifstream file(path);
+	if (!file)
+		return;
+
+	std::string line;
+	while (std::getline(file, line))
+	{
+		const size_t hash = line.find('#');
+		if (hash != std::string::npos)
+			line.erase(hash);
+
+		std::istringstream in(line);
+		int polls = 0;
+		if (!(in >> polls) || polls <= 0)
+			continue;
+
+		PeppyScriptStep step = {polls, 0, 128, 128};
+		std::string tok;
+		while (in >> tok)
+		{
+			for (char &c : tok)
+				c = (char)toupper((unsigned char)c);
+			size_t start = 0;
+			while (start < tok.size())
+			{
+				const size_t plus = tok.find('+', start);
+				const std::string one = tok.substr(start, plus - start);
+				if (!one.empty() && !PeppyScriptToken(one, &step))
+					WARN_LOG(SLIPPI, "[Peppy] input script: unknown token '%s'", one.c_str());
+				if (plus == std::string::npos)
+					break;
+				start = plus + 1;
+			}
+		}
+		s_peppy_script.push_back(step);
+	}
+
+	NOTICE_LOG(SLIPPI, "[Peppy] input script loaded: %u steps from %s",
+	           (u32)s_peppy_script.size(), path.c_str());
+}
+
+bool PeppyFillScriptPad(GCPadStatus *pad, int port)
+{
+	if (port != 0)
+		return false;
+
+	if (!s_peppy_loaded)
+		PeppyLoadScript();
+
+	if (s_peppy_index >= s_peppy_script.size())
+		return false;
+
+	const PeppyScriptStep &step = s_peppy_script[s_peppy_index];
+	if (s_peppy_remaining == 0)
+	{
+		s_peppy_remaining = step.polls;
+		NOTICE_LOG(SLIPPI, "[Peppy] input step %u/%u: buttons %04x stick %u,%u for %d",
+		           (u32)s_peppy_index + 1, (u32)s_peppy_script.size(),
+		           step.buttons, step.stick_x, step.stick_y, step.polls);
+	}
+
+	pad->button = step.buttons | PAD_USE_ORIGIN;
+	pad->stickX = step.stick_x;
+	pad->stickY = step.stick_y;
+	pad->substickX = 128;
+	pad->substickY = 128;
+	pad->triggerLeft = (step.buttons & PAD_TRIGGER_L) ? 255 : 0;
+	pad->triggerRight = (step.buttons & PAD_TRIGGER_R) ? 255 : 0;
+	pad->err = PAD_ERR_NONE;
+
+	if (--s_peppy_remaining == 0)
+		s_peppy_index++;
+	return true;
+}
+}  // namespace
+
 // Peppy: a spectator is watching a match nobody at this machine is playing, so
 // the controller ports are driven from the received input timeline instead of
 // from hardware. This is the same seam movie playback uses to make the game read
@@ -147,6 +282,10 @@ static bool PeppyFillWatchPad(GCPadStatus *pad, int port)
 void CSIDevice_GCController::HandleMoviePadStatus(GCPadStatus* PadStatus)
 {
 	Movie::CallGCInputManip(PadStatus, ISIDevice::m_iDeviceNumber);
+
+	// A test script drives the pad outright while it has steps left.
+	if (PeppyFillScriptPad(PadStatus, ISIDevice::m_iDeviceNumber))
+		return;
 
 	// Watching takes precedence: there is no local player to read.
 	if (PeppyFillWatchPad(PadStatus, ISIDevice::m_iDeviceNumber))
