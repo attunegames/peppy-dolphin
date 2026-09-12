@@ -255,6 +255,8 @@ CEXISlippi::~CEXISlippi()
 // Peppy: two playing plus six waiting is what the character select column fits.
 static const u8 PEPPY_ROSTER_SLOTS = PEPPY_ROSTER_ACTIVE + PEPPY_ROSTER_QUEUE + PEPPY_ROSTER_LOBBY;
 static const u8 PEPPY_ROSTER_NAME_LEN = 16;
+// Kept in step with MSRB_ROOM_FLAG_* in the codeset's Online.s.
+static const u8 PEPPY_ROOM_FLAG_WATCHABLE = 1;
 
 void CEXISlippi::configureCommands(u8 *payload, u8 length)
 {
@@ -3056,6 +3058,14 @@ void CEXISlippi::prepareOnlineMatchState()
 		name.resize(PEPPY_ROSTER_NAME_LEN);
 		m_read_queue.insert(m_read_queue.end(), name.begin(), name.end());
 	}
+
+	// What the room can do, as opposed to who is in it. The roster cannot answer
+	// this on its own: a pair that has been introduced but has not started yet
+	// fills the two active slots and is still nothing to watch.
+	u8 roomFlags = 0;
+	if (SlippiMatchmaking::PeppyWatchActive() && SlippiMatchmaking::PeppyWatchReady())
+		roomFlags |= PEPPY_ROOM_FLAG_WATCHABLE;
+	m_read_queue.push_back(roomFlags);
 }
 
 u16 CEXISlippi::getRandomStage()
