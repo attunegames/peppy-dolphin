@@ -97,6 +97,8 @@ class CEXISlippi : public IEXIDevice
 		// everything Slippi uses.
 		CMD_PEPPY_CREATE_ROOM = 0xC5,
 		CMD_PEPPY_SET_QUEUED = 0xC6,
+		CMD_PEPPY_LIST_ROOMS = 0xC7,
+		CMD_PEPPY_JOIN_ROOM = 0xC8,
 
 		// Misc
 		CMD_LOG_MESSAGE = 0xD0,
@@ -189,6 +191,9 @@ class CEXISlippi : public IEXIDevice
 	    // mode byte, then listed/unlisted
 	    {CMD_PEPPY_CREATE_ROOM, 2},
 	    {CMD_PEPPY_SET_QUEUED, 1},
+	    {CMD_PEPPY_LIST_ROOMS, 1},
+	    // The mode, then four characters of room code.
+	    {CMD_PEPPY_JOIN_ROOM, 5},
 
 	    // Misc
 	    {CMD_LOG_MESSAGE, 0xFFFF}, // Variable size... will only work if by itself

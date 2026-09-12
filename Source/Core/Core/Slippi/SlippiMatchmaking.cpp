@@ -2077,6 +2077,157 @@ void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
 	         code.c_str(), kModes[mode]);
 }
 
+// The public room list.
+//
+// Fetched on a thread of its own rather than on the matchmaking one, because at
+// this point there is no room and so no matchmaking running - the browser is
+// what you use to find one.
+namespace
+{
+struct PeppyRoomEntry
+{
+	std::string code, owner;
+	u8 players = 0;
+};
+
+std::vector<PeppyRoomEntry> &PeppyRoomListState()
+{
+	static std::vector<PeppyRoomEntry> rooms;
+	return rooms;
+}
+
+std::mutex &PeppyRoomListLock()
+{
+	static std::mutex m;
+	return m;
+}
+
+std::atomic<bool> s_browsing{false};
+
+void PeppyRoomListThread(std::string mode)
+{
+	while (s_browsing.load())
+	{
+		json body;
+		body["p_mode"] = mode;
+		body["p_limit"] = 20;
+		std::string raw =
+		    PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_room_list", body.dump(), PeppyToken());
+
+		std::vector<PeppyRoomEntry> rooms;
+		try
+		{
+			json resp = json::parse(raw);
+			auto list = resp.find("rooms");
+			if (list != resp.end() && list->is_array())
+			{
+				for (const auto &r : *list)
+				{
+					PeppyRoomEntry e;
+					e.code = r.value("code", "");
+					e.owner = r.value("owner_name", "");
+					int n = r.value("players", 0);
+					e.players = (u8)(n < 0 ? 0 : (n > 255 ? 255 : n));
+					if (!e.code.empty())
+						rooms.push_back(e);
+				}
+			}
+			else
+			{
+				ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room list said no: %s", raw.substr(0, 200).c_str());
+			}
+		}
+		catch (...)
+		{
+			ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Room list could not be read");
+		}
+
+		{
+			std::lock_guard<std::mutex> lk(PeppyRoomListLock());
+			PeppyRoomListState() = rooms;
+		}
+
+		// Rooms come and go while somebody reads the list, so it refreshes - but
+		// slowly. Nobody scrolls a list of public rooms faster than this.
+		for (int i = 0; i < 30 && s_browsing.load(); i++)
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+}
+} // namespace
+
+void SlippiMatchmaking::PeppyBrowseRooms(u8 mode)
+{
+	static const char *kModes[] = {"singles", "doubles", "ironman", "crew", "tournament"};
+	if (mode >= sizeof(kModes) / sizeof(kModes[0]))
+		return;
+	if (!PeppySignIn())
+	{
+		ERROR_LOG(SLIPPI_ONLINE, "[Peppy] Browse could not sign in");
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lk(PeppyRoomListLock());
+		PeppyRoomListState().clear();
+	}
+	if (!s_browsing.exchange(true))
+		std::thread(PeppyRoomListThread, std::string(kModes[mode])).detach();
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Browsing %s rooms", kModes[mode]);
+}
+
+bool SlippiMatchmaking::PeppyBrowsing()
+{
+	return s_browsing.load();
+}
+
+u8 SlippiMatchmaking::PeppyRoomListCount()
+{
+	std::lock_guard<std::mutex> lk(PeppyRoomListLock());
+	return (u8)PeppyRoomListState().size();
+}
+
+std::string SlippiMatchmaking::PeppyRoomListCode(u8 i)
+{
+	std::lock_guard<std::mutex> lk(PeppyRoomListLock());
+	return i < PeppyRoomListState().size() ? PeppyRoomListState()[i].code : std::string();
+}
+
+std::string SlippiMatchmaking::PeppyRoomListOwner(u8 i)
+{
+	std::lock_guard<std::mutex> lk(PeppyRoomListLock());
+	return i < PeppyRoomListState().size() ? PeppyRoomListState()[i].owner : std::string();
+}
+
+u8 SlippiMatchmaking::PeppyRoomListPlayers(u8 i)
+{
+	std::lock_guard<std::mutex> lk(PeppyRoomListLock());
+	return i < PeppyRoomListState().size() ? PeppyRoomListState()[i].players : 0;
+}
+
+// Joining somebody else's room.
+//
+// pd_tick is what actually puts us in it - being a member is being in the
+// members table - so this only has to say which room the rest of the code
+// should be talking about. The room screen then starts matchmaking the same way
+// it does for a room we made ourselves.
+void SlippiMatchmaking::PeppyJoinRoom(const std::string &code, u8 mode)
+{
+	static const char *kModes[] = {"singles", "doubles", "ironman", "crew", "tournament"};
+	if (code.empty())
+		return;
+
+	s_browsing = false;
+	{
+		std::lock_guard<std::mutex> lk(PeppyActiveLock());
+		PeppyActive().code = code;
+		// Somebody else's passcode is not ours to show, and a listed room has
+		// none anyway.
+		PeppyActive().passcode.clear();
+		if (mode < sizeof(kModes) / sizeof(kModes[0]))
+			PeppyActive().mode = kModes[mode];
+	}
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Joining room '%s'", code.c_str());
+}
+
 void SlippiMatchmaking::PeppyStillOnline()
 {
 	u64 now = Common::Timer::GetTimeMs();
