@@ -1516,7 +1516,11 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	const PeppyConfig &cfg = PeppyCfg();
 
 	json body;
-	body["p_room"] = cfg.room;
+	// PeppyRoom(), not cfg.room: a room made from the menus outranks the one in
+	// peppy.json. Reading it off the config here meant registering presence in
+	// the room you made and then polling a different one for opponents, so two
+	// people in the same room would never have been introduced.
+	body["p_room"] = PeppyRoom();
 	body["p_name"] = cfg.name;
 	body["p_code"] = cfg.code;
 
