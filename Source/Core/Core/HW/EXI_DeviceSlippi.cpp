@@ -2164,6 +2164,16 @@ void CEXISlippi::startFindMatch(u8 *payload)
 		isEnetInitialized = true;
 	}
 
+	// Peppy: a room starts the search the moment you walk into it, and the
+	// character select asks again when a spectator gets there. FindMatch assigns
+	// over m_matchmakeThread without joining it, so a second ask while the first
+	// is still running is a std::terminate. One search at a time.
+	if (matchmaking->IsSearching())
+	{
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Already searching - ignoring the second ask");
+		return;
+	}
+
 	matchmaking->FindMatch(search);
 #endif
 }
