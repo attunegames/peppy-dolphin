@@ -3026,6 +3026,17 @@ void CEXISlippi::prepareOnlineMatchState()
 
 	// Add alt stage mode to output
 	m_read_queue.push_back(static_cast<u8>(alt_stage_mode));
+
+	// Peppy: the room we are in, for the character select to show. Five bytes
+	// each - four characters and a terminator - and appended last so none of the
+	// offsets above move.
+	std::string roomCode = SlippiMatchmaking::PeppyRoomCode();
+	roomCode.resize(5);
+	m_read_queue.insert(m_read_queue.end(), roomCode.begin(), roomCode.end());
+
+	std::string roomPass = SlippiMatchmaking::PeppyRoomPasscode();
+	roomPass.resize(5);
+	m_read_queue.insert(m_read_queue.end(), roomPass.begin(), roomPass.end());
 }
 
 u16 CEXISlippi::getRandomStage()
