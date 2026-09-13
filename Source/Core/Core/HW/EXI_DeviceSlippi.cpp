@@ -3625,6 +3625,14 @@ void CEXISlippi::handleGamePrepStepComplete(const SlippiExiTypes::GpCompleteStep
 	res.char_color_selection = query.char_color_selection;
 	memcpy(res.stage_selections, query.stage_selections, 2);
 
+	// A watcher is on the draft screen too - that is how watching works, their
+	// pads are driven by the players' replayed inputs, so they have to be in the
+	// same scene. But their copy of the module still thinks it is picking, and
+	// their netplay client points at the people they are watching. Sending this
+	// would inject a stranger's bans and picks into somebody else's set.
+	if (SlippiMatchmaking::PeppyWatchActive())
+		return;
+
 	if (slippi_netplay)
 		slippi_netplay->SendGamePrepStep(res);
 }
