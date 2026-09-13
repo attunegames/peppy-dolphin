@@ -1459,7 +1459,17 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	// timeline is thousands of frames ahead, nothing skips, and it runs as fast
 	// as the emulator will go until it draws level.
 	if (SlippiMatchmaking::PeppyWatchActive())
+	{
+		// CompleteHigh is a high-water mark, not a promise that this particular
+		// frame's pads are in hand. Ask for the thing we are about to use: if it
+		// is not there, wait for it rather than running the frame on a neutral
+		// pad, which is how a watcher walks past the live edge of the match it
+		// is supposed to be following.
+		u8 probe[SLIPPI_PAD_FULL_SIZE] = {};
+		if (!SlippiMatchmaking::PeppyWatchPad(frame, 0, probe))
+			return true;
 		return SlippiMatchmaking::PeppyWatchLatestFrame() < frame;
+	}
 
 	auto status = slippi_netplay->GetSlippiConnectStatus();
 	bool connectionFailed = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_FAILED;
@@ -1646,8 +1656,17 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	// drawn, on top of the throttler being off.
 	if (SlippiMatchmaking::PeppyWatchActive())
 	{
+		// Hysteresis, and a margin. Ten frames is a sixth of a second: close
+		// enough that the throttler was being switched off and on again
+		// constantly, and far too late to start slowing down from full speed.
+		// Start chasing when a couple of seconds behind, and stop well before
+		// drawing level rather than exactly at it.
+		static bool chasing = false;
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
-		PeppyCatchUpSpeed(behind > 10);
+
+		if (chasing ? behind < 30 : behind > 120)
+			chasing = behind > 120;
+		PeppyCatchUpSpeed(chasing);
 
 		if ((frame % 60) == 0)
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s | pads: %s", frame,
