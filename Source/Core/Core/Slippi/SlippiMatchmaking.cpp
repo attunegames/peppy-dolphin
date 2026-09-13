@@ -572,6 +572,10 @@ std::mutex &PeppyDraftLock()
 
 // Our own last pick, waiting for a tick to carry it up. -1 means nothing new to
 // say, which is every tick except the one right after a choice is made.
+// Set when a room turns out to predate migration 18 and does not know the draft
+// arguments. Up here with the rest of it, because both tickers send them.
+std::atomic<bool> s_peppy_no_draft_args{false};
+
 std::atomic<int> s_my_stage{-1};
 std::atomic<int> s_my_char{-1};
 std::atomic<int> s_my_color{-1};
@@ -583,6 +587,32 @@ u8 PeppyJsonU8(const json &o, const char *key, u8 dflt)
 		return dflt;
 	int v = it->get<int>();
 	return (u8)(v < 0 ? dflt : (v > 255 ? dflt : v));
+}
+
+// Anything we have chosen since the last tick, added to whichever call is going
+// out. Sent once - exchange(-1) - so a pick is published rather than restated
+// forever.
+//
+// BOTH tickers need this. The matchmaking loop stops once a pair is introduced,
+// and every pick happens after that, so the heartbeat is the only thing still
+// talking to the room while the draft is on. Putting it in one and not the
+// other meant the picks were recorded and never sent anywhere.
+void PeppyAddPicks(json &body)
+{
+	if (s_peppy_no_draft_args)
+		return;
+
+	const int stage = s_my_stage.exchange(-1);
+	const int chr = s_my_char.exchange(-1);
+	const int color = s_my_color.exchange(-1);
+
+	if (stage >= 0)
+		body["p_stage"] = stage;
+	if (chr >= 0)
+	{
+		body["p_char"] = chr;
+		body["p_color"] = color < 0 ? 0 : color;
+	}
 }
 
 void PeppyRememberDraft(const json &resp)
@@ -1567,6 +1597,9 @@ void PeppyHeartbeat()
 		// matches is how the loser kept re-pairing with the winner the instant a
 		// game ended, skipping whoever was actually next in the queue.
 		body["p_presence_only"] = true;
+		// The draft happens entirely inside a match, and this is the only thing
+		// still ticking by then.
+		PeppyAddPicks(body);
 		std::string raw = PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 
 		// Keep the panel honest while nobody is searching. Only a searching
@@ -1632,7 +1665,6 @@ static std::atomic<bool> s_peppy_queued{false};
 // Set once a room turns out to predate p_searching. See handlePeppyMatchmaking.
 static std::atomic<bool> s_peppy_no_searching_arg{false};
 // Same, for the draft arguments migration 18 adds.
-static std::atomic<bool> s_peppy_no_draft_args{false};
 
 void SlippiMatchmaking::PeppySetQueued(bool queued)
 {
@@ -1678,22 +1710,7 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	if (!s_peppy_no_searching_arg)
 		body["p_searching"] = queued;
 
-	// Anything we have chosen since the last tick. Sent once - exchange(-1) - so
-	// a pick is published rather than restated forever, and so a room that
-	// predates migration 18 is only ever sent the arguments it knows.
-	if (!s_peppy_no_draft_args)
-	{
-		const int stage = s_my_stage.exchange(-1);
-		const int chr = s_my_char.exchange(-1);
-		const int color = s_my_color.exchange(-1);
-		if (stage >= 0)
-			body["p_stage"] = stage;
-		if (chr >= 0)
-		{
-			body["p_char"] = chr;
-			body["p_color"] = color < 0 ? 0 : color;
-		}
-	}
+	PeppyAddPicks(body);
 
 	std::string raw = PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 	json resp;
