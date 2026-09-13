@@ -3898,6 +3898,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 		case CMD_PEPPY_SET_QUEUED:
 			SlippiMatchmaking::PeppySetQueued(memPtr[bufLoc + 1] != 0);
 			break;
+		case CMD_PEPPY_LEAVE_ROOM:
+			SlippiMatchmaking::PeppyLeaveRoom();
+			break;
 		case CMD_PEPPY_LIST_ROOMS:
 			SlippiMatchmaking::PeppyBrowseRooms(memPtr[bufLoc + 1]);
 			break;

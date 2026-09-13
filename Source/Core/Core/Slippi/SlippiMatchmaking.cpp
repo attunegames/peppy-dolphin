@@ -2001,6 +2001,27 @@ std::string SlippiMatchmaking::PeppyRoomPasscode()
 // menu is about to animate into the character select anyway - whereas doing it
 // on a thread would race the matchmaking that starts there, which would read the
 // room before this had finished setting it.
+// Let go of the room.
+//
+// Not the same as leaving the queue: that is PeppySetQueued, and it keeps you
+// in the room watching. This forgets the room itself, so the heartbeat stops
+// and nothing pairs - which is what lets the character select open idle, with
+// Melee's own BACK able to leave online the way it always could.
+//
+// The launcher's own room in peppy.json is left alone. It is how Peppy starts a
+// session, and a player backing out of a room they made should not lose it.
+void SlippiMatchmaking::PeppyLeaveRoom()
+{
+	PeppySetQueued(false);
+	{
+		std::lock_guard<std::mutex> lk(PeppyActiveLock());
+		if (PeppyActive().code.empty())
+			return;
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Left room '%s'", PeppyActive().code.c_str());
+		PeppyActive() = PeppyActiveRoom();
+	}
+}
+
 void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
 {
 	static const char *kModes[] = {"singles", "doubles", "ironman", "crew", "tournament"};
