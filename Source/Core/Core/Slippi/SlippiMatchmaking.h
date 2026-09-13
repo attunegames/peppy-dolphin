@@ -139,7 +139,7 @@ class SlippiMatchmaking
 	static u8 PeppyRoomListPlayers(u8 i);
 	static void PeppyJoinRoom(const std::string &code, u8 mode);
 	static void PeppySetQueued(bool queued);
-	static void PeppyLeaveRoom();
+	static void PeppyLeaveRoom(bool wasInRoom);
 	static bool PeppyQueued();
 
 	// What the character select shows. The passcode is empty unless the room is

@@ -195,7 +195,7 @@ class CEXISlippi : public IEXIDevice
 	    {CMD_PEPPY_LIST_ROOMS, 1},
 	    // The mode, then four characters of room code.
 	    {CMD_PEPPY_JOIN_ROOM, 5},
-	    {CMD_PEPPY_LEAVE_ROOM, 0},
+	    {CMD_PEPPY_LEAVE_ROOM, 1},
 
 	    // Misc
 	    {CMD_LOG_MESSAGE, 0xFFFF}, // Variable size... will only work if by itself
