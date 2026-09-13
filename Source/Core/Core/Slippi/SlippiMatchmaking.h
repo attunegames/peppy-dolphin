@@ -137,6 +137,7 @@ class SlippiMatchmaking
 	// started. 0xFF means nothing picked yet.
 	static void PeppyDraftInfo(u8 *out);
 	static void PeppyReportPick(int stage, int character, int color);
+	static bool PeppyInActivePair();
 	static u8 PeppyRoomListCount();
 	static std::string PeppyRoomListCode(u8 i);
 	static std::string PeppyRoomListOwner(u8 i);
