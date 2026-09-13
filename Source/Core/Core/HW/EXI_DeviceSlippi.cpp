@@ -1463,18 +1463,14 @@ bool CEXISlippi::shouldSkipOnlineFrame(s32 frame, s32 finalizedFrame)
 	// That is what holds it in step with the live match. During catch-up the
 	// timeline is thousands of frames ahead, nothing skips, and it runs as fast
 	// as the emulator will go until it draws level.
+	// ⚠️ Do NOT also require PeppyWatchPad(frame) to succeed here. It looks like
+	// the stricter, more honest test - wait for the pad you are about to use -
+	// and it stalls the watcher for ever: that lookup misses on any frame the
+	// timeline has pruned, which is precisely the old frames a catch-up is
+	// replaying. The watcher then stops advancing while the timeline keeps
+	// growing, so "behind" grows, and the catch-up never switches off.
 	if (SlippiMatchmaking::PeppyWatchActive())
-	{
-		// CompleteHigh is a high-water mark, not a promise that this particular
-		// frame's pads are in hand. Ask for the thing we are about to use: if it
-		// is not there, wait for it rather than running the frame on a neutral
-		// pad, which is how a watcher walks past the live edge of the match it
-		// is supposed to be following.
-		u8 probe[SLIPPI_PAD_FULL_SIZE] = {};
-		if (!SlippiMatchmaking::PeppyWatchPad(frame, 0, probe))
-			return true;
 		return SlippiMatchmaking::PeppyWatchLatestFrame() < frame;
-	}
 
 	auto status = slippi_netplay->GetSlippiConnectStatus();
 	bool connectionFailed = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_FAILED;
