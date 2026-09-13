@@ -2952,6 +2952,12 @@ void CEXISlippi::prepareOnlineMatchState()
 
 	// Add names to output
 	// Always send static local player name
+	//
+	// Peppy: it is only filled in above when there is a match, and a room has
+	// none - so the game had no way to recognise itself in the room's own
+	// roster. It is the player either way, so say so.
+	if (localPlayerName.empty())
+		localPlayerName = userInfo.displayName;
 	localPlayerName = ConvertStringForGame(localPlayerName, MAX_NAME_LENGTH);
 	m_read_queue.insert(m_read_queue.end(), localPlayerName.begin(), localPlayerName.end());
 
