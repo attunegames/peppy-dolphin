@@ -2049,6 +2049,16 @@ void SlippiMatchmaking::PeppyLeaveRoom()
 	// Before the beat is stopped, so the sweep cannot start a second one.
 	s_heartbeat = false;
 
+	// And forget who was in it. The room screen asks the roster whether it is
+	// already in the queue, rather than assuming - that is what lets it come back
+	// from training without being asked to join again - so a roster left over
+	// from the room you just walked out of puts you straight back in the queue of
+	// the next one you make.
+	{
+		std::lock_guard<std::mutex> lk(PeppyRosterLock());
+		PeppyRosterState() = PeppyRoster();
+	}
+
 	{
 		std::lock_guard<std::mutex> lk(PeppyActiveLock());
 		PeppyActive() = PeppyActiveRoom();
