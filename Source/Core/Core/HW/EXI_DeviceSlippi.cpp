@@ -1645,7 +1645,6 @@ static bool PeppyWatchChasing(s32 behind)
 	static bool chasing = false;
 
 	chasing = chasing ? behind > 30 : behind > 120;
-	PeppyCatchUpSpeed(chasing);
 	return chasing;
 }
 
@@ -1874,12 +1873,20 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	auto state = watching ? SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED
 	                      : slippi_netplay->GetSlippiConnectStatus();
 
-	// Decided BEFORE the chain, and every frame, because it turns the throttler
-	// on and off. Left inside the chain it was never reached once the watcher
-	// drew level: from then on shouldSkip is true most frames - that is what
-	// waiting for the next input looks like - so the catch-up was switched on
-	// and never switched back off, and the emulator sat at several hundred
-	// frames a second until the match ended.
+	// ⚠️ This decides whether to raise Melee's engine loop count - and NOTHING
+	// ELSE. It must not touch the emulator's throttle.
+	//
+	// PeppyCatchUpSpeed used to be called from shouldAdvanceOnlineFrame, which
+	// is only reached when the branch below does NOT fire - that is, only when
+	// the watcher is already level. So the one value it could ever be called
+	// with was false: switching the throttle off was dead code that had never
+	// run. The catch-up that worked was frameResult 5 on its own, a bounded
+	// double speed, which is why it drew level and stopped.
+	//
+	// Moving the call here "so it is always evaluated" woke that dead path up,
+	// and an unbounded fast-forward is a different animal from 2x: several
+	// hundred frames a second, sailing past the live edge. Do not reintroduce
+	// it without a way to bound it.
 	bool chasing = watching && PeppyWatchChasing(SlippiMatchmaking::PeppyWatchLatestFrame() - frame);
 
 	if (shouldSkip)
