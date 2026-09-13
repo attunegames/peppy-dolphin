@@ -1606,6 +1606,15 @@ static u64 peppySelectionsSentAt = 0; // last time we told the opponent our char
 static bool peppyRequeue = false;
 static u64 peppyRequeueAt = 0; // when it became due - the teardown needs a head start
 
+// Whether a watcher is still chasing the live edge, with hysteresis.
+//
+// The threshold used to be a bare "more than ten frames behind", tested fresh
+// every frame. Ten frames is a sixth of a second - close enough that it turned
+// itself on and off constantly, and far too late to begin slowing down from
+// several times speed. Start only when properly behind; keep going until nearly
+// level.
+static bool PeppyWatchChasing(s32 behind);
+
 static void PeppyCatchUpSpeed(bool fast)
 {
 	static bool applied = false;
@@ -1628,6 +1637,15 @@ static void PeppyCatchUpSpeed(bool fast)
 
 	applied = fast;
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Catch-up %s (throttle off, muted)", fast ? "on" : "off");
+}
+
+static bool PeppyWatchChasing(s32 behind)
+{
+	static bool chasing = false;
+
+	chasing = chasing ? behind > 30 : behind > 120;
+	PeppyCatchUpSpeed(chasing);
+	return chasing;
 }
 
 bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
@@ -1656,17 +1674,10 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	// drawn, on top of the throttler being off.
 	if (SlippiMatchmaking::PeppyWatchActive())
 	{
-		// Hysteresis, and a margin. Ten frames is a sixth of a second: close
-		// enough that the throttler was being switched off and on again
-		// constantly, and far too late to start slowing down from full speed.
-		// Start chasing when a couple of seconds behind, and stop well before
-		// drawing level rather than exactly at it.
-		static bool chasing = false;
+		// Reached only when NOT chasing - the frameResult 5 branch above short
+		// circuits this whole function while catching up, which is where the
+		// pacing decision lives.
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
-
-		if (chasing ? behind < 30 : behind > 120)
-			chasing = behind > 120;
-		PeppyCatchUpSpeed(chasing);
 
 		if ((frame % 60) == 0)
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s | pads: %s", frame,
@@ -1872,12 +1883,16 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	{
 		frameResult = 3; // Indicates we have disconnected
 	}
-	else if (watching && SlippiMatchmaking::PeppyWatchLatestFrame() - frame > 10)
+	else if (watching && PeppyWatchChasing(SlippiMatchmaking::PeppyWatchLatestFrame() - frame))
 	{
 		// Tell Melee to bury this frame. ForceEngineOnRollback reads this and
 		// raises the engine loop count, so several frames are simulated for one
 		// frame drawn - the catch-up happens behind whatever is already on
 		// screen instead of being played out in front of the viewer.
+		//
+		// This is the branch that actually fast-forwards, and it is an else-if
+		// before shouldAdvanceOnlineFrame - so nothing in that function runs
+		// while a watcher is catching up. Pacing belongs here.
 		frameResult = 5;
 	}
 	else if (shouldAdvanceOnlineFrame(frame))
