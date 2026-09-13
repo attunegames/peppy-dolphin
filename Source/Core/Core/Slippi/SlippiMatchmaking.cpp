@@ -333,6 +333,11 @@ std::mutex &PeppyActiveLock()
 // joining a room, which is the only way back in.
 std::atomic<bool> s_left_room{false};
 
+// Whether the public room list is being fetched. Declared up here with the rest
+// of the leaving state because PeppyLeaveRoom turns it off, and that is defined
+// long before the fetch thread it belongs to.
+std::atomic<bool> s_browsing{false};
+
 std::string PeppyRoom()
 {
 	std::lock_guard<std::mutex> lk(PeppyActiveLock());
@@ -2049,6 +2054,11 @@ void SlippiMatchmaking::PeppyLeaveRoom()
 	// Before the beat is stopped, so the sweep cannot start a second one.
 	s_heartbeat = false;
 
+	// The public list stops too. B on the room list comes through here, and the
+	// fetch thread would otherwise go on asking every three seconds for a screen
+	// nobody is looking at any more.
+	s_browsing = false;
+
 	// The corner caption goes with it. Nothing refreshes it once the heartbeat
 	// stops, so left alone it sits on the menu for another eleven seconds still
 	// naming the room you have just walked out of.
@@ -2182,8 +2192,6 @@ std::mutex &PeppyRoomListLock()
 	static std::mutex m;
 	return m;
 }
-
-std::atomic<bool> s_browsing{false};
 
 void PeppyRoomListThread(std::string mode)
 {
