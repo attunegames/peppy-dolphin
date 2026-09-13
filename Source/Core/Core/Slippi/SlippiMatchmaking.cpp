@@ -4,9 +4,7 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
-#include "Core/HW/Memmap.h"
 #include "Core/NetPlayProto.h"
-#include "Core/PowerPC/PowerPC.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include <array>
 #include <atomic>
@@ -1486,25 +1484,6 @@ void PeppyHeartbeat()
 		u64 alive = s_online_alive.load();
 		if (alive != 0 && Common::Timer::GetTimeMs() - alive > 10000)
 		{
-			// What the game was doing when it went quiet.
-			//
-			// The room screen stops thinking at a fixed frame count, about half a
-			// minute in, and nothing on the Melee side can say why: whatever is
-			// wrong stops the very code that would report it. So ask from out
-			// here. Sampled twice, a moment apart, because a program counter
-			// sitting still and one going round a short loop are different
-			// problems and one reading cannot tell them apart.
-			for (int probe = 0; probe < 2; probe++)
-			{
-				WARN_LOG(SLIPPI_ONLINE,
-				         "[Peppy] quiet: pc %08x lr %08x sp %08x  scene %02x %02x %02x %02x %02x %02x",
-				         PowerPC::ppcState.pc, PowerPC::ppcState.spr[SPR_LR], PowerPC::ppcState.gpr[1],
-				         Memory::Read_U8(0x80479D30), Memory::Read_U8(0x80479D31),
-				         Memory::Read_U8(0x80479D32), Memory::Read_U8(0x80479D33),
-				         Memory::Read_U8(0x80479D34), Memory::Read_U8(0x80479D35));
-				if (probe == 0)
-					std::this_thread::sleep_for(std::chrono::milliseconds(200));
-			}
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Left online mode - leaving the room");
 			PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_leave",
 			          json{{"p_room", PeppyRoom()}}.dump(), PeppyToken());
