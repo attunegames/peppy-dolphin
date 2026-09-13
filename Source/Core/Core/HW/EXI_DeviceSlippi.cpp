@@ -3676,14 +3676,31 @@ void CEXISlippi::handleGamePrepStepComplete(const SlippiExiTypes::GpCompleteStep
 	// band across the top of the room screen until somebody says what was
 	// picked, and the two of them only ever tell each other.
 	//
-	// stage_selections[0] is the step's stage - a ban on the ban step, the pick
-	// on the pick step - so only the later one is worth publishing. The step
-	// index says which, and 0xFF from the module means nothing chosen here.
+	// The module fills the whole struct on every step, leaving zeroes in the
+	// fields that step is not about - and character 0 is Captain Falcon, stage 0
+	// is a real id. A zero cannot be told from a choice by its value, so the step
+	// index decides which field is worth believing:
+	//
+	//     0   ban         nothing to publish
+	//     1   stage
+	//     2+  characters
+	//
+	// Getting this wrong published Falcon for both players before either had
+	// picked, and then wiped the stage back to zero when they did.
 	{
-		const int chr = query.char_selection == 0xFF ? -1 : query.char_selection;
-		const int stage = query.stage_selections[0] == 0xFF ? -1 : query.stage_selections[0];
-		SlippiMatchmaking::PeppyReportPick(query.step_idx == 0 ? -1 : stage, chr,
-		                                   query.char_color_selection);
+		int stage = -1, chr = -1;
+
+		if (query.step_idx == 1)
+			stage = query.stage_selections[0];
+		else if (query.step_idx >= 2)
+			chr = query.char_selection;
+
+		if (stage == 0xFF || stage == 0)
+			stage = -1;
+		if (chr == 0xFF)
+			chr = -1;
+
+		SlippiMatchmaking::PeppyReportPick(stage, chr, query.char_color_selection);
 	}
 
 	if (slippi_netplay)
