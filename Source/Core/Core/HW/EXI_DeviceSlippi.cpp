@@ -3102,6 +3102,13 @@ void CEXISlippi::prepareOnlineMatchState()
 		owner.resize(16);
 		m_read_queue.insert(m_read_queue.end(), owner.begin(), owner.end());
 	}
+
+	// What the pair are playing, for everybody who is not one of them. They
+	// settle it between themselves over netplay, so without this the room has an
+	// empty band across the top while two people it can name pick a stage.
+	u8 draft[6];
+	SlippiMatchmaking::PeppyDraftInfo(draft);
+	m_read_queue.insert(m_read_queue.end(), draft, draft + sizeof(draft));
 }
 
 u16 CEXISlippi::getRandomStage()
@@ -3625,13 +3632,25 @@ void CEXISlippi::handleGamePrepStepComplete(const SlippiExiTypes::GpCompleteStep
 	res.char_color_selection = query.char_color_selection;
 	memcpy(res.stage_selections, query.stage_selections, 2);
 
-	// A watcher is on the draft screen too - that is how watching works, their
-	// pads are driven by the players' replayed inputs, so they have to be in the
-	// same scene. But their copy of the module still thinks it is picking, and
-	// their netplay client points at the people they are watching. Sending this
-	// would inject a stranger's bans and picks into somebody else's set.
+	// A watcher's copy of the module still thinks it is picking, and its netplay
+	// client points at the people it is watching. Sending this would inject a
+	// stranger's bans and picks into somebody else's set.
 	if (SlippiMatchmaking::PeppyWatchActive())
 		return;
+
+	// Tell the ROOM as well as the opponent. Everyone else is watching an empty
+	// band across the top of the room screen until somebody says what was
+	// picked, and the two of them only ever tell each other.
+	//
+	// stage_selections[0] is the step's stage - a ban on the ban step, the pick
+	// on the pick step - so only the later one is worth publishing. The step
+	// index says which, and 0xFF from the module means nothing chosen here.
+	{
+		const int chr = query.char_selection == 0xFF ? -1 : query.char_selection;
+		const int stage = query.stage_selections[0] == 0xFF ? -1 : query.stage_selections[0];
+		SlippiMatchmaking::PeppyReportPick(query.step_idx == 0 ? -1 : stage, chr,
+		                                   query.char_color_selection);
+	}
 
 	if (slippi_netplay)
 		slippi_netplay->SendGamePrepStep(res);

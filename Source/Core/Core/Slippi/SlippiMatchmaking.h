@@ -133,6 +133,10 @@ class SlippiMatchmaking
 	// The public room list, and joining one of them.
 	static void PeppyBrowseRooms(u8 mode);
 	static bool PeppyBrowsing();
+	// Six bytes: stage, both characters and costumes, and whether the game has
+	// started. 0xFF means nothing picked yet.
+	static void PeppyDraftInfo(u8 *out);
+	static void PeppyReportPick(int stage, int character, int color);
 	static u8 PeppyRoomListCount();
 	static std::string PeppyRoomListCode(u8 i);
 	static std::string PeppyRoomListOwner(u8 i);

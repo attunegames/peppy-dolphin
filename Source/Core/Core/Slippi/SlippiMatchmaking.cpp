@@ -543,6 +543,66 @@ struct PeppyRoster
 	std::vector<std::string> lobby;  // in the room, but not waiting for a game
 };
 
+// What the pair have settled on, as the ROOM knows it - which is not how the
+// two of them know it. They agree stage and characters between themselves over
+// netplay; nobody else in the room is in that conversation, so the room screen
+// would have nothing to draw. The tick carries it instead.
+//
+// 0xFF is "not picked yet", so the screen can show a question mark rather than
+// guessing at Captain Falcon.
+struct PeppyDraft
+{
+	u8 stage = 0xFF;
+	u8 p1_char = 0xFF, p1_color = 0;
+	u8 p2_char = 0xFF, p2_color = 0;
+	bool playing = false;
+};
+
+PeppyDraft &PeppyDraftState()
+{
+	static PeppyDraft d;
+	return d;
+}
+
+std::mutex &PeppyDraftLock()
+{
+	static std::mutex m;
+	return m;
+}
+
+// Our own last pick, waiting for a tick to carry it up. -1 means nothing new to
+// say, which is every tick except the one right after a choice is made.
+std::atomic<int> s_my_stage{-1};
+std::atomic<int> s_my_char{-1};
+std::atomic<int> s_my_color{-1};
+
+u8 PeppyJsonU8(const json &o, const char *key, u8 dflt)
+{
+	auto it = o.find(key);
+	if (it == o.end() || it->is_null())
+		return dflt;
+	int v = it->get<int>();
+	return (u8)(v < 0 ? dflt : (v > 255 ? dflt : v));
+}
+
+void PeppyRememberDraft(const json &resp)
+{
+	auto d = resp.find("draft");
+	if (d == resp.end() || !d->is_object())
+		return;   // a room that predates migration 18
+
+	PeppyDraft n;
+	n.stage    = PeppyJsonU8(*d, "stage", 0xFF);
+	n.p1_char  = PeppyJsonU8(*d, "hostChar", 0xFF);
+	n.p1_color = PeppyJsonU8(*d, "hostColor", 0);
+	n.p2_char  = PeppyJsonU8(*d, "guestChar", 0xFF);
+	n.p2_color = PeppyJsonU8(*d, "guestColor", 0);
+	n.playing  = d->value("playing", false);
+
+	std::lock_guard<std::mutex> lk(PeppyDraftLock());
+	PeppyDraftState() = n;
+}
+
 PeppyRoster &PeppyRosterState()
 {
 	static PeppyRoster r;
@@ -1519,6 +1579,7 @@ void PeppyHeartbeat()
 			if (resp.find("active") != resp.end())
 			{
 				PeppyRememberRoster(resp);
+				PeppyRememberDraft(resp);
 				PeppyShowRoom(resp, 11000);
 			}
 
@@ -1567,6 +1628,8 @@ void SlippiMatchmaking::peppySleep()
 static std::atomic<bool> s_peppy_queued{false};
 // Set once a room turns out to predate p_searching. See handlePeppyMatchmaking.
 static std::atomic<bool> s_peppy_no_searching_arg{false};
+// Same, for the draft arguments migration 18 adds.
+static std::atomic<bool> s_peppy_no_draft_args{false};
 
 void SlippiMatchmaking::PeppySetQueued(bool queued)
 {
@@ -1612,6 +1675,23 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	if (!s_peppy_no_searching_arg)
 		body["p_searching"] = queued;
 
+	// Anything we have chosen since the last tick. Sent once - exchange(-1) - so
+	// a pick is published rather than restated forever, and so a room that
+	// predates migration 18 is only ever sent the arguments it knows.
+	if (!s_peppy_no_draft_args)
+	{
+		const int stage = s_my_stage.exchange(-1);
+		const int chr = s_my_char.exchange(-1);
+		const int color = s_my_color.exchange(-1);
+		if (stage >= 0)
+			body["p_stage"] = stage;
+		if (chr >= 0)
+		{
+			body["p_char"] = chr;
+			body["p_color"] = color < 0 ? 0 : color;
+		}
+	}
+
 	std::string raw = PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 	json resp;
 	try
@@ -1643,12 +1723,19 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 		// stays in the queue the way it did before, which is worse than leaving
 		// on demand and much better than nothing working.
 		if (resp.value("code", "") == "PGRST202")
+		{
+			// Which argument is missing is not worth guessing at - drop both sets
+			// and the call goes back to a signature every room has had since
+			// migration 14.
 			s_peppy_no_searching_arg = true;
+			s_peppy_no_draft_args = true;
+		}
 		peppySleep();
 		return;
 	}
 
 	PeppyRememberRoster(resp);
+	PeppyRememberDraft(resp);
 	PeppyShowRoom(resp);
 
 	std::string state = resp.value("state", "");
@@ -2274,6 +2361,32 @@ void SlippiMatchmaking::PeppyBrowseRooms(u8 mode)
 bool SlippiMatchmaking::PeppyBrowsing()
 {
 	return s_browsing.load();
+}
+
+// What the room knows about the match it is watching. Six bytes for the screen.
+void SlippiMatchmaking::PeppyDraftInfo(u8 *out)
+{
+	std::lock_guard<std::mutex> lk(PeppyDraftLock());
+	const PeppyDraft &d = PeppyDraftState();
+	out[0] = d.stage;
+	out[1] = d.p1_char;
+	out[2] = d.p1_color;
+	out[3] = d.p2_char;
+	out[4] = d.p2_color;
+	out[5] = d.playing ? 1 : 0;
+}
+
+// A pick we have just made, for the next tick to carry to the room. The two
+// players tell each other over netplay; this is how everybody else finds out.
+void SlippiMatchmaking::PeppyReportPick(int stage, int character, int color)
+{
+	if (stage >= 0)
+		s_my_stage = stage;
+	if (character >= 0)
+	{
+		s_my_char = character;
+		s_my_color = color < 0 ? 0 : color;
+	}
 }
 
 u8 SlippiMatchmaking::PeppyRoomListCount()
