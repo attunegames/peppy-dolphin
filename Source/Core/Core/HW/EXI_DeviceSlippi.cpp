@@ -3899,7 +3899,11 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 			SlippiMatchmaking::PeppySetQueued(memPtr[bufLoc + 1] != 0);
 			break;
 		case CMD_PEPPY_LEAVE_ROOM:
-			SlippiMatchmaking::PeppyLeaveRoom();
+			// The payload says whether there was a room to leave. Walking off the
+			// list of public rooms is not leaving one - you were never in it -
+			// and treating it as though it were dropped the launcher out of the
+			// room peppy.json put it in.
+			SlippiMatchmaking::PeppyLeaveRoom(memPtr[bufLoc + 1] != 0);
 			break;
 		case CMD_PEPPY_LIST_ROOMS:
 			SlippiMatchmaking::PeppyBrowseRooms(memPtr[bufLoc + 1]);

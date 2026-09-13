@@ -2018,33 +2018,32 @@ std::string SlippiMatchmaking::PeppyRoomPasscode()
 	return PeppyActive().code.empty() ? std::string() : PeppyActive().passcode;
 }
 
-// Make a room from inside Melee's menus.
+// Leaving the room screen.
 //
-// Synchronous on purpose. The call is a couple of hundred milliseconds and the
-// menu is about to animate into the character select anyway - whereas doing it
-// on a thread would race the matchmaking that starts there, which would read the
-// room before this had finished setting it.
-// Let go of the room.
+// Not the same as leaving the queue - that is PeppySetQueued, and it keeps you
+// in the room watching somebody else play. This lets go of the room itself.
 //
-// Not the same as leaving the queue: that is PeppySetQueued, and it keeps you
-// in the room watching. This forgets the room itself, so the heartbeat stops
-// and nothing pairs - which is what lets the character select open idle, with
-// Melee's own BACK able to leave online the way it always could.
+// wasInRoom is false when the player was looking at the list of public rooms
+// rather than sitting in one. Walking off that list is not leaving a room,
+// because you were never in one; treating it as though it were dropped the
+// launcher out of the room peppy.json had started it in.
 //
-// The launcher's own room in peppy.json is left alone. It is how Peppy starts a
-// session, and a player backing out of a room they made should not lose it.
-// Leaving the room, as opposed to leaving the queue.
-//
-// Told to the room rather than gone quiet about. The heartbeat's own sweep does
-// get you out eventually, but "eventually" is a name sitting in somebody else's
-// queue for half a minute, and the room goes on offering you games in the
-// meantime. pd_leave is the same call the sweep makes.
-//
-// The post runs on a thread of its own because this is called from the EXI
-// handler, which is the emulated CPU - a slow round trip here is a frozen
-// frame there.
-void SlippiMatchmaking::PeppyLeaveRoom()
+// When there is a room, it is TOLD rather than gone quiet about. The
+// heartbeat's own sweep does get you out eventually, but eventually is half a
+// minute of your name in somebody else's queue while the room goes on offering
+// you games. pd_leave is the same call the sweep makes, and it runs on a thread
+// of its own because this is called from the EXI handler - which is the
+// emulated CPU, where a slow round trip is a frozen frame.
+void SlippiMatchmaking::PeppyLeaveRoom(bool wasInRoom)
 {
+	// The public list stops either way. B on the room list comes through here,
+	// and the fetch thread would otherwise go on asking every three seconds for a
+	// screen nobody is looking at any more.
+	s_browsing = false;
+
+	if (!wasInRoom)
+		return;
+
 	PeppySetQueued(false);
 
 	const std::string room = PeppyRoom();
@@ -2053,11 +2052,6 @@ void SlippiMatchmaking::PeppyLeaveRoom()
 
 	// Before the beat is stopped, so the sweep cannot start a second one.
 	s_heartbeat = false;
-
-	// The public list stops too. B on the room list comes through here, and the
-	// fetch thread would otherwise go on asking every three seconds for a screen
-	// nobody is looking at any more.
-	s_browsing = false;
 
 	// The corner caption goes with it. Nothing refreshes it once the heartbeat
 	// stops, so left alone it sits on the menu for another eleven seconds still
@@ -2091,6 +2085,12 @@ void SlippiMatchmaking::PeppyLeaveRoom()
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Left room '%s'", room.c_str());
 }
 
+// Make a room from inside Melee's menus.
+//
+// Synchronous on purpose. The call is a couple of hundred milliseconds and the
+// menu is about to animate onward anyway - whereas doing it on a thread would
+// race the matchmaking that starts next, which would read the room before this
+// had finished setting it.
 void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
 {
 	static const char *kModes[] = {"singles", "doubles", "ironman", "crew", "tournament"};
