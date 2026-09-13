@@ -327,6 +327,12 @@ std::mutex &PeppyActiveLock()
 	return m;
 }
 
+// Set when the player walks out of a room from inside the game. The launcher's
+// room is a room we are in too, and the config it came from is read-only - so
+// this is how leaving gets to leave that one as well. Cleared by making or
+// joining a room, which is the only way back in.
+std::atomic<bool> s_left_room{false};
+
 std::string PeppyRoom()
 {
 	std::lock_guard<std::mutex> lk(PeppyActiveLock());
@@ -334,7 +340,9 @@ std::string PeppyRoom()
 	// itself with its own non-recursive mutex already held every time no room had
 	// been made from the menus yet. That is every boot until somebody presses
 	// Create, and it took the launcher's own room with it.
-	return PeppyActive().code.empty() ? PeppyCfg().room : PeppyActive().code;
+	if (!PeppyActive().code.empty())
+		return PeppyActive().code;
+	return s_left_room.load() ? std::string() : PeppyCfg().room;
 }
 
 // Peppy is driving this launch if it can reach Supabase and knows a room, from
@@ -1570,12 +1578,22 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 {
 	const PeppyConfig &cfg = PeppyCfg();
 
+	// No room, nothing to ask about. Backing out of one leaves this thread
+	// running - the room list and the next room both want it - and a tick with an
+	// empty room only earns an error back, once per poll, forever.
+	const std::string room = PeppyRoom();
+	if (room.empty())
+	{
+		peppySleep();
+		return;
+	}
+
 	json body;
 	// PeppyRoom(), not cfg.room: a room made from the menus outranks the one in
 	// peppy.json. Reading it off the config here meant registering presence in
 	// the room you made and then polling a different one for opponents, so two
 	// people in the same room would never have been introduced.
-	body["p_room"] = PeppyRoom();
+	body["p_room"] = room;
 	body["p_name"] = cfg.name;
 	body["p_code"] = cfg.code;
 	// Present but not asking for a game until Start is pressed. The two say
@@ -2010,16 +2028,42 @@ std::string SlippiMatchmaking::PeppyRoomPasscode()
 //
 // The launcher's own room in peppy.json is left alone. It is how Peppy starts a
 // session, and a player backing out of a room they made should not lose it.
+// Leaving the room, as opposed to leaving the queue.
+//
+// Told to the room rather than gone quiet about. The heartbeat's own sweep does
+// get you out eventually, but "eventually" is a name sitting in somebody else's
+// queue for half a minute, and the room goes on offering you games in the
+// meantime. pd_leave is the same call the sweep makes.
+//
+// The post runs on a thread of its own because this is called from the EXI
+// handler, which is the emulated CPU - a slow round trip here is a frozen
+// frame there.
 void SlippiMatchmaking::PeppyLeaveRoom()
 {
 	PeppySetQueued(false);
+
+	const std::string room = PeppyRoom();
+	if (room.empty())
+		return;
+
+	// Before the beat is stopped, so the sweep cannot start a second one.
+	s_heartbeat = false;
+
 	{
 		std::lock_guard<std::mutex> lk(PeppyActiveLock());
-		if (PeppyActive().code.empty())
-			return;
-		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Left room '%s'", PeppyActive().code.c_str());
 		PeppyActive() = PeppyActiveRoom();
 	}
+	// The launcher's room counts as a room we are in, and PeppyRoom() falls back
+	// to it - so leaving has to leave that too, or the next heartbeat walks
+	// straight back into the room we just left.
+	s_left_room = true;
+
+	std::thread([room]() {
+		PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_leave", json{{"p_room", room}}.dump(),
+		          PeppyToken());
+	}).detach();
+
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Left room '%s'", room.c_str());
 }
 
 void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
@@ -2080,6 +2124,7 @@ void SlippiMatchmaking::PeppyCreateRoom(u8 mode, bool listed)
 	if (code.empty())
 		return;
 
+	s_left_room = false;
 	{
 		std::lock_guard<std::mutex> lk(PeppyActiveLock());
 		PeppyActive().code = code;
@@ -2245,6 +2290,7 @@ void SlippiMatchmaking::PeppyJoinRoom(const std::string &code, u8 mode)
 		return;
 
 	s_browsing = false;
+	s_left_room = false;
 	{
 		std::lock_guard<std::mutex> lk(PeppyActiveLock());
 		PeppyActive().code = code;
