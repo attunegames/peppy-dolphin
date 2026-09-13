@@ -597,7 +597,10 @@ void PeppyRememberDraft(const json &resp)
 	n.p1_color = PeppyJsonU8(*d, "hostColor", 0);
 	n.p2_char  = PeppyJsonU8(*d, "guestChar", 0xFF);
 	n.p2_color = PeppyJsonU8(*d, "guestColor", 0);
-	n.playing  = d->value("playing", false);
+	// Not the pairing's own 'ready', which only means the two have been
+	// introduced - it is true while they are still banning. They are playing
+	// once they have both picked somebody, and that we can see.
+	n.playing  = d->value("playing", false) && n.p1_char != 0xFF && n.p2_char != 0xFF;
 
 	std::lock_guard<std::mutex> lk(PeppyDraftLock());
 	PeppyDraftState() = n;
