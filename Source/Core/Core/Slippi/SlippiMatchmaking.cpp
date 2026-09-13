@@ -2049,6 +2049,11 @@ void SlippiMatchmaking::PeppyLeaveRoom()
 	// Before the beat is stopped, so the sweep cannot start a second one.
 	s_heartbeat = false;
 
+	// The corner caption goes with it. Nothing refreshes it once the heartbeat
+	// stops, so left alone it sits on the menu for another eleven seconds still
+	// naming the room you have just walked out of.
+	OSD::AddTypedMessage(OSD::MessageType::PeppyRoom, "", 1, OSD::Color::CYAN);
+
 	// And forget who was in it. The room screen asks the roster whether it is
 	// already in the queue, rather than assuming - that is what lets it come back
 	// from training without being asked to join again - so a roster left over
