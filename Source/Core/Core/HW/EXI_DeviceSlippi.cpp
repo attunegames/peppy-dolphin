@@ -258,6 +258,11 @@ static const u8 PEPPY_ROSTER_NAME_LEN = 16;
 // Kept in step with MSRB_ROOM_FLAG_* in the codeset's Online.s.
 static const u8 PEPPY_ROOM_FLAG_WATCHABLE = 1;
 static const u8 PEPPY_ROOM_FLAG_BROWSING = 2;
+// This client is not one of the two in the match. The character select uses it
+// to send onlookers back to the room: its own test was "is the active roster
+// empty", which is false for everybody while a pair is playing, so a watcher
+// whose stream ended was left sitting there.
+static const u8 PEPPY_ROOM_FLAG_ONLOOKER = 4;
 static const u8 PEPPY_ROOMLIST_SLOTS = 8;
 
 void CEXISlippi::configureCommands(u8 *payload, u8 length)
@@ -1872,6 +1877,15 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	bool watching = SlippiMatchmaking::PeppyWatchActive();
 	auto state = watching ? SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED
 	                      : slippi_netplay->GetSlippiConnectStatus();
+
+	// Decided BEFORE the chain, and every frame, because it turns the throttler
+	// on and off. Left inside the chain it was never reached once the watcher
+	// drew level: from then on shouldSkip is true most frames - that is what
+	// waiting for the next input looks like - so the catch-up was switched on
+	// and never switched back off, and the emulator sat at several hundred
+	// frames a second until the match ended.
+	bool chasing = watching && PeppyWatchChasing(SlippiMatchmaking::PeppyWatchLatestFrame() - frame);
+
 	if (shouldSkip)
 	{
 		// Event though we are skipping an input, we still want to prepare the opponent inputs because
@@ -1883,7 +1897,7 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	{
 		frameResult = 3; // Indicates we have disconnected
 	}
-	else if (watching && PeppyWatchChasing(SlippiMatchmaking::PeppyWatchLatestFrame() - frame))
+	else if (chasing)
 	{
 		// Tell Melee to bury this frame. ForceEngineOnRollback reads this and
 		// raises the engine loop count, so several frames are simulated for one
@@ -3119,6 +3133,8 @@ void CEXISlippi::prepareOnlineMatchState()
 		roomFlags |= PEPPY_ROOM_FLAG_WATCHABLE;
 	if (SlippiMatchmaking::PeppyBrowsing())
 		roomFlags |= PEPPY_ROOM_FLAG_BROWSING;
+	if (!SlippiMatchmaking::PeppyInActivePair())
+		roomFlags |= PEPPY_ROOM_FLAG_ONLOOKER;
 	m_read_queue.push_back(roomFlags);
 
 	// The public rooms, as of the last fetch. Fixed slots so the screen can

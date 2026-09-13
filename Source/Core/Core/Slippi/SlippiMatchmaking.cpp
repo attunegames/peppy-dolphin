@@ -2409,6 +2409,19 @@ void SlippiMatchmaking::PeppyReportPick(int stage, int character, int color)
 	}
 }
 
+// Are we one of the two the room has introduced? The first roster slots are the
+// pair; everything after is the queue or the lobby.
+bool SlippiMatchmaking::PeppyInActivePair()
+{
+	const std::string me = PeppyCfg().name;
+	if (me.empty())
+		return false;
+	for (u8 slot = 0; slot < PEPPY_ROSTER_ACTIVE; slot++)
+		if (PeppyRosterName(slot) == me)
+			return true;
+	return false;
+}
+
 u8 SlippiMatchmaking::PeppyRoomListCount()
 {
 	std::lock_guard<std::mutex> lk(PeppyRoomListLock());
