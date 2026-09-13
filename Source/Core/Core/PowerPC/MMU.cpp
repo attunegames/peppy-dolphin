@@ -1162,6 +1162,20 @@ static void GenerateDSIException(u32 effectiveAddress, bool write)
 	// DSI exceptions are only supported in MMU mode.
 	if (!SConfig::GetInstance().bMMU)
 	{
+		// Peppy: a program counter on its own says which instruction, not which
+		// call - and in a relocatable module loaded into a heap it does not even
+		// say which function, because the address moves. The link register does,
+		// and the registers say where the bad pointer came from. Logged as well as
+		// shown, so a scripted test can read it without a dialog in the way.
+		ERROR_LOG(MEMMAP, "[Peppy] bad %s 0x%08x  pc %08x lr %08x sp %08x",
+		          write ? "write to" : "read from", effectiveAddress, PC,
+		          PowerPC::ppcState.spr[SPR_LR], PowerPC::ppcState.gpr[1]);
+		for (int i = 0; i < 32; i += 8)
+			ERROR_LOG(MEMMAP, "[Peppy]   r%-2d %08x %08x %08x %08x %08x %08x %08x %08x", i,
+			          PowerPC::ppcState.gpr[i + 0], PowerPC::ppcState.gpr[i + 1],
+			          PowerPC::ppcState.gpr[i + 2], PowerPC::ppcState.gpr[i + 3],
+			          PowerPC::ppcState.gpr[i + 4], PowerPC::ppcState.gpr[i + 5],
+			          PowerPC::ppcState.gpr[i + 6], PowerPC::ppcState.gpr[i + 7]);
 		PanicAlert("Invalid %s 0x%08x, PC = 0x%08x ", write ? "write to" : "read from", effectiveAddress, PC);
 		return;
 	}
