@@ -1189,7 +1189,7 @@ void CEXISlippi::preparePeppyReplayWaiting()
 	m_read_queue.clear();
 	bool waiting = g_replayComm->isNewReplay();
 	WARN_LOG(SLIPPI, "[Peppy] Replay waiting? %s (%s)", waiting ? "yes" : "no",
-	         g_replayComm->getReplayPath().c_str());
+	         g_replayComm->getSettings().replayPath.c_str());
 	m_read_queue.push_back(waiting ? 1 : 0);
 }
 
