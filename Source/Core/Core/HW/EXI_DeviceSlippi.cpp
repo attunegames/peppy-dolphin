@@ -1204,6 +1204,30 @@ void CEXISlippi::PeppySceneWatch()
 		{
 			u32 now = Memory::Read_U32(0x80479D30);
 			u32 pending = Memory::Read_U32(0x80479D34);
+
+			// Hold the destination from out here.
+			//
+			// The game cannot do this itself: whatever asks for the handover
+			// lives in the scene being left, and Scene_ExitMinor destroys it in
+			// the same frame, so there is nothing left to re-assert the value
+			// when the menu's own next-scene logic overwrites it. Measured, the
+			// game's write lands (pending 0e, flag 1) and it still ends up on
+			// major 18. Nothing here is subject to that lifetime.
+			u8 major = (now >> 24) & 0xFF;
+			if (peppyForceMajorArmed)
+			{
+				if (major == 0x0E)
+				{
+					WARN_LOG(SLIPPI, "[Peppy] reached the playback major, releasing");
+					peppyForceMajorArmed = false;
+				}
+				else if (major != 0x0E)
+				{
+					Memory::Write_U8(0x0E, 0x80479D31);  // pending major
+					Memory::Write_U8(0x01, 0x80479D3C);  // end this major
+				}
+			}
+
 			if (now != last || pending != lastPending)
 			{
 				last = now;
@@ -1231,6 +1255,8 @@ void CEXISlippi::preparePeppyReplayWaiting()
 	bool waiting = g_replayComm->isNewReplay();
 	WARN_LOG(SLIPPI, "[Peppy] Replay waiting? %s (%s)", waiting ? "yes" : "no",
 	         g_replayComm->getSettings().replayPath.c_str());
+	if (waiting)
+		peppyForceMajorArmed = true;
 	m_read_queue.push_back(waiting ? 1 : 0);
 }
 
