@@ -186,6 +186,9 @@ class CEXISlippi : public IEXIDevice
 	    {CMD_GET_PLAYER_SETTINGS, 0},
 	    {CMD_REPORT_MATCH_STATUS_UPDATE, static_cast<u32>(sizeof(SlippiExiTypes::ReportMatchStatusUpdateQuery) - 1)},
 
+	    // Peppy: no payload, the answer comes back on the read
+	    {CMD_PEPPY_REPLAY_WAITING, 0},
+
 	    // Misc
 	    {CMD_LOG_MESSAGE, 0xFFFF}, // Variable size... will only work if by itself
 	    {CMD_FILE_LENGTH, 0x40},
