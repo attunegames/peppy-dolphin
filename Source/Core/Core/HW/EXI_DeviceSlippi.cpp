@@ -1177,6 +1177,22 @@ void CEXISlippi::prepareIsStockSteal(u8 *payload)
 	m_read_queue.push_back(playerIsBack);
 }
 
+// Peppy: a peek at whether a replay is queued.
+//
+// The menu needs to know whether to leave for the playback scene, but it cannot
+// ask CMD_IS_FILE_READY to find out: that one loads the game and records it as
+// played, so the playback scene's own poll would then be told "no" forever and
+// sit on the waiting screen. isNewReplay only reads the comm file and compares,
+// so asking it costs nothing.
+void CEXISlippi::preparePeppyReplayWaiting()
+{
+	m_read_queue.clear();
+	bool waiting = g_replayComm->isNewReplay();
+	WARN_LOG(SLIPPI, "[Peppy] Replay waiting? %s (%s)", waiting ? "yes" : "no",
+	         g_replayComm->getReplayPath().c_str());
+	m_read_queue.push_back(waiting ? 1 : 0);
+}
+
 void CEXISlippi::prepareIsFileReady()
 {
 	m_read_queue.clear();
@@ -3784,6 +3800,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 			break;
 		case CMD_IS_FILE_READY:
 			prepareIsFileReady();
+			break;
+		case CMD_PEPPY_REPLAY_WAITING:
+			preparePeppyReplayWaiting();
 			break;
 		case CMD_GET_GECKO_CODES:
 			m_read_queue.clear();
