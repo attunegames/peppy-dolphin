@@ -1889,6 +1889,18 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	// it without a way to bound it.
 	bool chasing = watching && PeppyWatchChasing(SlippiMatchmaking::PeppyWatchLatestFrame() - frame);
 
+	// The one number nobody has been logging: where PLAYBACK is against the live
+	// edge. Everything else printed so far is the broadcaster's side - how much
+	// data has arrived - which says nothing about whether we have run past it.
+	// Unconditional, because the interesting case is exactly the one where the
+	// other logs go quiet.
+	if (watching && (frame % 60) == 0)
+	{
+		const s32 live = SlippiMatchmaking::PeppyWatchLatestFrame();
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Playback frame %d, live %d, %d behind, %s, skip %d", frame, live,
+		         live - frame, chasing ? "chasing" : "level", shouldSkip ? 1 : 0);
+	}
+
 	if (shouldSkip)
 	{
 		// Event though we are skipping an input, we still want to prepare the opponent inputs because
