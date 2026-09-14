@@ -4,6 +4,7 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Common/Thread.h"
 #include <ctime>
 #include "base64.hpp"
 #include <Core/ConfigManager.h>
@@ -552,55 +553,96 @@ void SlippiSpectateClient::ClientThread(std::string host, u16 port)
 	enet_address_set_host(&addr, host.c_str());
 	addr.port = port;
 
-	ENetPeer *peer = enet_host_connect(client, &addr, 3, 0);
-	if (!peer)
-	{
-		ERROR_LOG(SLIPPI, "[Peppy] watcher has no peer slot");
-		enet_host_destroy(client);
-		enet_deinitialize();
-		m_running = false;
-		return;
-	}
-
 	WARN_LOG(SLIPPI, "[Peppy] watcher dialling %s:%d", host.c_str(), port);
 
+	// Keep dialling.
+	//
+	// A watcher is usually up before the match it wants to see - that is the
+	// whole point of being queued behind one - so a single attempt is no use:
+	// the first run failed simply because the broadcaster had not started yet.
+	// The same loop covers the broadcaster restarting between games.
+	bool announced = false;
 	while (m_running)
 	{
-		ENetEvent event;
-		while (enet_host_service(client, &event, 100) > 0)
+		ENetPeer *peer = enet_host_connect(client, &addr, 3, 0);
+		if (!peer)
 		{
-			switch (event.type)
+			ERROR_LOG(SLIPPI, "[Peppy] watcher has no peer slot");
+			break;
+		}
+
+		bool connected = false;
+		ENetEvent event;
+		// Give the handshake a moment before deciding nobody is home.
+		for (int waited = 0; m_running && !connected && waited < 2000; waited += 100)
+		{
+			while (enet_host_service(client, &event, 100) > 0)
 			{
-			case ENET_EVENT_TYPE_CONNECT:
-			{
-				// Ask for the whole history. Everyone starts at frame 1 and
-				// fast-forwards; there is no join-live path, by design.
-				json req;
-				req["type"] = "connect_request";
-				req["cursor"] = 0;
-				std::string body = req.dump();
-				ENetPacket *packet = enet_packet_create(body.data(), body.length(), ENET_PACKET_FLAG_RELIABLE);
-				enet_peer_send(peer, 0, packet);
-				enet_host_flush(client);
-				WARN_LOG(SLIPPI, "[Peppy] watcher asked for the stream from the start");
-				break;
-			}
-			case ENET_EVENT_TYPE_RECEIVE:
-				HandlePacket((const char *)event.packet->data, (u32)event.packet->dataLength);
-				enet_packet_destroy(event.packet);
-				break;
-			case ENET_EVENT_TYPE_DISCONNECT:
-				WARN_LOG(SLIPPI, "[Peppy] watcher disconnected");
-				m_running = false;
-				break;
-			default:
-				break;
+				if (event.type == ENET_EVENT_TYPE_CONNECT)
+				{
+					connected = true;
+					break;
+				}
+				if (event.type == ENET_EVENT_TYPE_RECEIVE)
+					enet_packet_destroy(event.packet);
 			}
 		}
+
+		if (!connected)
+		{
+			enet_peer_reset(peer);
+			if (!announced)
+			{
+				WARN_LOG(SLIPPI, "[Peppy] nobody broadcasting on %s:%d yet, waiting", host.c_str(), port);
+				announced = true;
+			}
+			for (int i = 0; i < 20 && m_running; i++)
+				Common::SleepCurrentThread(100);
+			continue;
+		}
+
+		announced = false;
+
+		// Ask for the whole history. Everyone starts at frame 1 and fast-forwards
+		// to live; there is no join-live path, by design.
+		json req;
+		req["type"] = "connect_request";
+		req["cursor"] = 0;
+		std::string body = req.dump();
+		ENetPacket *packet = enet_packet_create(body.data(), body.length(), ENET_PACKET_FLAG_RELIABLE);
+		enet_peer_send(peer, 0, packet);
+		enet_host_flush(client);
+		WARN_LOG(SLIPPI, "[Peppy] watcher connected, asked for the stream from the start");
+
+		bool dropped = false;
+		while (m_running && !dropped)
+		{
+			while (enet_host_service(client, &event, 100) > 0)
+			{
+				switch (event.type)
+				{
+				case ENET_EVENT_TYPE_RECEIVE:
+					HandlePacket((const char *)event.packet->data, (u32)event.packet->dataLength);
+					enet_packet_destroy(event.packet);
+					break;
+				case ENET_EVENT_TYPE_DISCONNECT:
+					WARN_LOG(SLIPPI, "[Peppy] broadcaster went away, will redial");
+					dropped = true;
+					break;
+				default:
+					break;
+				}
+			}
+		}
+
+		CloseReplay();
+		if (m_running)
+			enet_peer_reset(peer);
+		else
+			enet_peer_disconnect(peer, 0);
 	}
 
 	CloseReplay();
-	enet_peer_disconnect(peer, 0);
 	enet_host_destroy(client);
 	enet_deinitialize();
 }
