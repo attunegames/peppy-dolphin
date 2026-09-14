@@ -188,6 +188,10 @@ CEXISlippi::CEXISlippi()
 	// Forces savestate to re-init regions when a new ISO is loaded
 	SlippiSavestate::shouldForceInit = true;
 
+	// Peppy: start the scene watcher (see PeppySceneWatch).
+	peppySceneWatchRunning = true;
+	m_peppySceneWatchThread = std::thread(&CEXISlippi::PeppySceneWatch, this);
+
 	// Update user file and then listen for User
 #ifndef IS_PLAYBACK
 	user->ListenForLogIn();
@@ -216,6 +220,12 @@ CEXISlippi::~CEXISlippi()
 	// suddenly stops. This would happen often on netplay when the opponent
 	// would close the emulation before the file successfully finished writing
 	writeToFileAsync(&empty[0], 0, "close");
+	peppySceneWatchRunning = false;
+	if (m_peppySceneWatchThread.joinable())
+	{
+		m_peppySceneWatchThread.join();
+	}
+
 	writeThreadRunning = false;
 	if (m_fileWriteThread.joinable())
 	{
@@ -1175,6 +1185,37 @@ void CEXISlippi::prepareIsStockSteal(u8 *payload)
 
 	u8 playerIsBack = players.count(playerIndex) ? 1 : 0;
 	m_read_queue.push_back(playerIsBack);
+}
+
+// Peppy: report Melee's scene controller whenever it changes.
+//
+// When a scene handover goes wrong the game stops logging, because the code that
+// would have logged is in the scene that never started. Watching the controller
+// from this side keeps reporting regardless: 0x80479D30 is major, pending major,
+// unknown, minor, unknown, pending minor - and a scene that is stuck shows up as
+// a value that arrives and then never changes again.
+void CEXISlippi::PeppySceneWatch()
+{
+	u32 last = 0xFFFFFFFF;
+	u32 lastPending = 0xFFFFFFFF;
+	while (peppySceneWatchRunning)
+	{
+		if (Memory::IsInitialized())
+		{
+			u32 now = Memory::Read_U32(0x80479D30);
+			u32 pending = Memory::Read_U32(0x80479D34);
+			if (now != last || pending != lastPending)
+			{
+				last = now;
+				lastPending = pending;
+				WARN_LOG(SLIPPI, "[Peppy] scene: major %02x pending-major %02x minor %02x "
+				                 "prev-minor %02x pending-minor %02x",
+				         (now >> 24) & 0xFF, (now >> 16) & 0xFF, now & 0xFF,
+				         (pending >> 24) & 0xFF, (pending >> 16) & 0xFF);
+			}
+		}
+		Common::SleepCurrentThread(100);
+	}
 }
 
 // Peppy: a peek at whether a replay is queued.

@@ -284,6 +284,13 @@ class CEXISlippi : public IEXIDevice
 	void prepareIsFileReady();
 	void preparePeppyReplayWaiting();
 
+	// Peppy: watches Melee's scene controller from outside the game, so a scene
+	// that hangs still reports where it stopped. The game's own logging goes
+	// quiet exactly when it is most needed.
+	void PeppySceneWatch();
+	std::thread m_peppySceneWatchThread;
+	bool peppySceneWatchRunning = false;
+
 	// misc stuff
 	void handleChatMessage(u8 *payload);
 	void logMessageFromGame(u8 *payload);
