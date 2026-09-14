@@ -1607,15 +1607,6 @@ static u64 peppySelectionsSentAt = 0; // last time we told the opponent our char
 static bool peppyRequeue = false;
 static u64 peppyRequeueAt = 0; // when it became due - the teardown needs a head start
 
-// Whether a watcher is still chasing the live edge, with hysteresis.
-//
-// The threshold used to be a bare "more than ten frames behind", tested fresh
-// every frame. Ten frames is a sixth of a second - close enough that it turned
-// itself on and off constantly, and far too late to begin slowing down from
-// several times speed. Start only when properly behind; keep going until nearly
-// level.
-static bool PeppyWatchChasing(s32 behind);
-
 static void PeppyCatchUpSpeed(bool fast)
 {
 	static bool applied = false;
@@ -1638,14 +1629,6 @@ static void PeppyCatchUpSpeed(bool fast)
 
 	applied = fast;
 	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Catch-up %s (throttle off, muted)", fast ? "on" : "off");
-}
-
-static bool PeppyWatchChasing(s32 behind)
-{
-	static bool chasing = false;
-
-	chasing = chasing ? behind > 30 : behind > 120;
-	return chasing;
 }
 
 bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
@@ -1672,22 +1655,35 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 	//
 	// One in two while catching up: double speed with half the frames never
 	// drawn, on top of the throttler being off.
+	// ⚠️ This is the mechanism that was verified working on 2026-09-10, restored
+	// after a rewrite replaced it with one that does nothing. Two halves, and it
+	// needs BOTH:
+	//
+	//   the throttler off       so the emulator may run faster than 60fps
+	//   RESP_ADVANCE, rationed  so Melee loops the engine an extra time
+	//
+	// The replacement sent RESP_CATCHUP (5) instead and dropped the throttle
+	// call. RESP_CATCHUP is only read by ForceEngineOnRollback, which declines
+	// it whenever the engine loop count is already zero, so in practice nothing
+	// happened at all: playback sat exactly 60 frames a second behind a live
+	// match, never closing a gap of five thousand frames.
+	//
+	// It has to be RATIONED. Returning it on every poll turns the input refetch
+	// into a runaway: the frame counter races away, the engine never gets to
+	// loop, and the watcher lands on the live frame holding a state that was
+	// never simulated. One in two is double speed with half the frames undrawn.
 	if (SlippiMatchmaking::PeppyWatchActive())
 	{
-		// Reached only when NOT chasing - the frameResult 5 branch above short
-		// circuits this whole function while catching up, which is where the
-		// pacing decision lives.
 		s32 behind = SlippiMatchmaking::PeppyWatchLatestFrame() - frame;
+		PeppyCatchUpSpeed(behind > 10);
+		bool catchingUp = behind > 10 && (frame % 2) == 0;
 
 		if ((frame % 60) == 0)
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch pacing: frame %d, timeline %d, %d behind, %s | pads: %s", frame,
 			         SlippiMatchmaking::PeppyWatchLatestFrame(), behind, behind > 10 ? "catching up" : "level",
 			         SlippiMatchmaking::PeppyWatchPadReport().c_str());
 
-		// Catching up is not this signal's job any more - it is a separate response
-		// code that makes Melee run several frames per render, so the frames in
-		// between are simulated and never drawn.
-		return false;
+		return catchingUp;
 	}
 	PeppyCatchUpSpeed(false);
 
@@ -1873,32 +1869,14 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	auto state = watching ? SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED
 	                      : slippi_netplay->GetSlippiConnectStatus();
 
-	// ⚠️ This decides whether to raise Melee's engine loop count - and NOTHING
-	// ELSE. It must not touch the emulator's throttle.
-	//
-	// PeppyCatchUpSpeed used to be called from shouldAdvanceOnlineFrame, which
-	// is only reached when the branch below does NOT fire - that is, only when
-	// the watcher is already level. So the one value it could ever be called
-	// with was false: switching the throttle off was dead code that had never
-	// run. The catch-up that worked was frameResult 5 on its own, a bounded
-	// double speed, which is why it drew level and stopped.
-	//
-	// Moving the call here "so it is always evaluated" woke that dead path up,
-	// and an unbounded fast-forward is a different animal from 2x: several
-	// hundred frames a second, sailing past the live edge. Do not reintroduce
-	// it without a way to bound it.
-	bool chasing = watching && PeppyWatchChasing(SlippiMatchmaking::PeppyWatchLatestFrame() - frame);
-
-	// The one number nobody has been logging: where PLAYBACK is against the live
-	// edge. Everything else printed so far is the broadcaster's side - how much
-	// data has arrived - which says nothing about whether we have run past it.
-	// Unconditional, because the interesting case is exactly the one where the
-	// other logs go quiet.
+	// Where playback is against the live edge. Kept from the debugging that
+	// found this: every other watch log reports the broadcaster's side, which
+	// says nothing about whether playback is keeping up.
 	if (watching && (frame % 60) == 0)
 	{
 		const s32 live = SlippiMatchmaking::PeppyWatchLatestFrame();
-		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Playback frame %d, live %d, %d behind, %s, skip %d", frame, live,
-		         live - frame, chasing ? "chasing" : "level", shouldSkip ? 1 : 0);
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Playback frame %d, live %d, %d behind, skip %d", frame, live, live - frame,
+		         shouldSkip ? 1 : 0);
 	}
 
 	if (shouldSkip)
@@ -1912,18 +1890,9 @@ void CEXISlippi::prepareOpponentInputs(s32 frame, bool shouldSkip)
 	{
 		frameResult = 3; // Indicates we have disconnected
 	}
-	else if (chasing)
-	{
-		// Tell Melee to bury this frame. ForceEngineOnRollback reads this and
-		// raises the engine loop count, so several frames are simulated for one
-		// frame drawn - the catch-up happens behind whatever is already on
-		// screen instead of being played out in front of the viewer.
-		//
-		// This is the branch that actually fast-forwards, and it is an else-if
-		// before shouldAdvanceOnlineFrame - so nothing in that function runs
-		// while a watcher is catching up. Pacing belongs here.
-		frameResult = 5;
-	}
+	// ⚠️ There was a RESP_CATCHUP (5) branch here. It has to stay gone: being an
+	// else-if ahead of shouldAdvanceOnlineFrame, it stopped that function from
+	// ever running for a watcher, which is where the working catch-up lives.
 	else if (shouldAdvanceOnlineFrame(frame))
 	{
 		frameResult = 4;
