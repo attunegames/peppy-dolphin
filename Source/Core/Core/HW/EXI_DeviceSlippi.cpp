@@ -1205,29 +1205,18 @@ void CEXISlippi::PeppySceneWatch()
 			u32 now = Memory::Read_U32(0x80479D30);
 			u32 pending = Memory::Read_U32(0x80479D34);
 
-			// Hold the destination from out here.
+			// The forcing probe that used to live here is gone. It answered its
+			// question: the game does not read pending-major to choose the next
+			// major. It went to 18 with 0e sitting in that byte, then overwrote
+			// the byte with 18 itself. The destination comes from somewhere else
+			// entirely, so no amount of writing here - from the game or from
+			// out here - can steer it.
 			//
-			// The game cannot do this itself: whatever asks for the handover
-			// lives in the scene being left, and Scene_ExitMinor destroys it in
-			// the same frame, so there is nothing left to re-assert the value
-			// when the menu's own next-scene logic overwrites it. Measured, the
-			// game's write lands (pending 0e, flag 1) and it still ends up on
-			// major 18. Nothing here is subject to that lifetime.
-			u8 major = (now >> 24) & 0xFF;
-			if (peppyForceMajorArmed)
-			{
-				if (major == 0x0E)
-				{
-					WARN_LOG(SLIPPI, "[Peppy] reached the playback major, releasing");
-					peppyForceMajorArmed = false;
-				}
-				else if (major != 0x0E)
-				{
-					Memory::Write_U8(0x0E, 0x80479D31);  // pending major
-					Memory::Write_U8(0x01, 0x80479D3C);  // end this major
-				}
-			}
-
+			// What does work is the pair Peppy already uses to leave the online
+			// major for the menu. It works from Peppy's own major and not from
+			// Melee's main menu, which decides its own destination. So the
+			// handover belongs inside the online major, which is also where the
+			// real trigger lives: you start spectating because you are queued.
 			if (now != last || pending != lastPending)
 			{
 				last = now;
@@ -1255,8 +1244,6 @@ void CEXISlippi::preparePeppyReplayWaiting()
 	bool waiting = g_replayComm->isNewReplay();
 	WARN_LOG(SLIPPI, "[Peppy] Replay waiting? %s (%s)", waiting ? "yes" : "no",
 	         g_replayComm->getSettings().replayPath.c_str());
-	if (waiting)
-		peppyForceMajorArmed = true;
 	m_read_queue.push_back(waiting ? 1 : 0);
 }
 
