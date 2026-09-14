@@ -192,6 +192,39 @@ CEXISlippi::CEXISlippi()
 	peppySceneWatchRunning = true;
 	m_peppySceneWatchThread = std::thread(&CEXISlippi::PeppySceneWatch, this);
 
+	// Peppy: spectate a broadcaster named in User/Config/peppy-watch.txt.
+	//
+	// One line, host:port of their spectate server (SlippiSpectatorLocalPort,
+	// 51441 by default; --slippi-spectator-port gives each local instance its
+	// own). The client turns their stream back into a .slp and points the comm
+	// file at it in mirror mode, and the game's own handover does the rest.
+	//
+	// A file rather than the backend for now: it makes spectating testable with
+	// one machine and no second player, since playback re-records and therefore
+	// broadcasts too.
+	{
+		std::string watchPath = File::GetUserPath(D_CONFIG_IDX) + "peppy-watch.txt";
+		std::string target;
+		if (File::Exists(watchPath) && File::ReadFileToString(watchPath, target))
+		{
+			while (!target.empty() && (target.back() == '
+' || target.back() == '' || target.back() == ' '))
+				target.pop_back();
+			auto colon = target.find(':');
+			if (colon != std::string::npos)
+			{
+				std::string host = target.substr(0, colon);
+				u16 port = (u16)atoi(target.substr(colon + 1).c_str());
+				WARN_LOG(SLIPPI, "[Peppy] spectating %s:%d", host.c_str(), port);
+				SlippiSpectateClient::getInstance()->Watch(host, port);
+			}
+			else
+			{
+				ERROR_LOG(SLIPPI, "[Peppy] peppy-watch.txt should be host:port, got '%s'", target.c_str());
+			}
+		}
+	}
+
 	// Update user file and then listen for User
 #ifndef IS_PLAYBACK
 	user->ListenForLogIn();
@@ -220,6 +253,8 @@ CEXISlippi::~CEXISlippi()
 	// suddenly stops. This would happen often on netplay when the opponent
 	// would close the emulation before the file successfully finished writing
 	writeToFileAsync(&empty[0], 0, "close");
+	SlippiSpectateClient::getInstance()->Stop();
+
 	peppySceneWatchRunning = false;
 	if (m_peppySceneWatchThread.joinable())
 	{
