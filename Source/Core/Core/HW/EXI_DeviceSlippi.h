@@ -93,6 +93,11 @@ class CEXISlippi : public IEXIDevice
 		CMD_GET_PLAYER_SETTINGS = 0xC3,
 		CMD_REPORT_MATCH_STATUS_UPDATE = 0xC4,
 
+		// Peppy: does Dolphin have a replay queued that has not been played yet?
+		// A peek - unlike CMD_IS_FILE_READY it does not load the game, so asking
+		// does not spend the answer the playback scene is waiting for.
+		CMD_PEPPY_REPLAY_WAITING = 0xCA,
+
 		// Misc
 		CMD_LOG_MESSAGE = 0xD0,
 		CMD_FILE_LENGTH = 0xD1,
@@ -274,6 +279,7 @@ class CEXISlippi : public IEXIDevice
 	void prepareFrameData(u8 *payload);
 	void prepareIsStockSteal(u8 *payload);
 	void prepareIsFileReady();
+	void preparePeppyReplayWaiting();
 
 	// misc stuff
 	void handleChatMessage(u8 *payload);
