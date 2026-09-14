@@ -1772,6 +1772,14 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 
 void CEXISlippi::handleSendInputs(s32 frame, u8 delay, s32 checksumFrame, u32 checksum, u8 *inputs)
 {
+	// What this client is actually sending, on the same early frames the watcher
+	// logs what it received. Holding the two side by side is the only way left
+	// to tell whether a watcher's divergence is bad inputs or something after
+	// them - every other check has come back clean.
+	if (frame <= 600 && frame % 60 == 0)
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] PAD sent f%d: %02x %02x %02x %02x %02x %02x %02x %02x (delay %d)", frame,
+		         inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], inputs[6], inputs[7], delay);
+
 	// On the first frame sent, we need to queue up empty dummy pads for as many
 	//	frames as we have delay
 	if (frame == 1)
