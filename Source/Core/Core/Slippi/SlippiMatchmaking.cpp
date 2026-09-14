@@ -1873,7 +1873,7 @@ bool SlippiMatchmaking::PeppyWatchPad(s32 frame, u8 idx, u8 *out)
 	// can be held against what the players actually sent. Everything else about
 	// the watch has been reasoned about and none of it explained a divergence;
 	// this is the ground truth.
-	if (frame % 600 == 0)
+	if (frame <= 600 && frame % 60 == 0)
 	{
 		const u8 *b = it->second[idx].data();
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] PAD watcher f%d p%d: %02x %02x %02x %02x %02x %02x %02x %02x", frame, idx,
