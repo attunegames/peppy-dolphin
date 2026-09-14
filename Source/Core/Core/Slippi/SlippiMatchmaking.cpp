@@ -1068,6 +1068,17 @@ struct PeppyTimeline
 	std::mutex m;
 	std::map<s32, std::array<std::array<u8, PEPPY_PAD_STRIDE>, 4>> frames;
 	std::map<s32, std::array<bool, 4>> present;
+	// Which players a frame must contain before it may be simulated.
+	//
+	// ⚠️ This used to be learned from the pads themselves - a player counted
+	// only once one of their packets had arrived. At the start of a watch that
+	// is nobody, so the first frames were judged complete on one player's inputs
+	// alone and handed to Melee with the other's controller reading neutral.
+	// The watcher then simulated a DIFFERENT match: same clock, wrong positions,
+	// wrong damage, and no way back, because a divergence is permanent.
+	//
+	// The match selections say how many players there are and they arrive before
+	// any pads, so that is what decides it. See Expect().
 	std::array<bool, 4> seen{};
 	s32 low = 0, high = 0;
 	bool any = false;
@@ -1154,6 +1165,15 @@ struct PeppyTimeline
 	{
 		std::lock_guard<std::mutex> lk(m);
 		return any ? high : 0;
+	}
+
+	// The match has this many players; every one of them owes us an input before
+	// a frame is worth simulating.
+	void Expect(int n)
+	{
+		std::lock_guard<std::mutex> lk(m);
+		for (int i = 0; i < n && i < 4; i++)
+			seen[i] = true;
 	}
 
 	s32 CompleteHigh()
@@ -1488,6 +1508,9 @@ void PeppyWatch(std::string endpoint)
 		if (ev.packet->dataLength >= 1 && d[0] == NP_MSG_SLIPPI_MATCH_SELECTIONS)
 		{
 			s_selections.Add(d, ev.packet->dataLength);
+			// Before the pad burst: from here a frame is not complete until
+			// everybody in the match has an input in it.
+			s_timeline.Expect(s_selections.Count());
 			gotSelections = true;
 			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watcher received match selections (%d bytes)",
 			         (int)ev.packet->dataLength);
