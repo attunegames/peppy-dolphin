@@ -128,13 +128,12 @@ static bool PeppyFillWatchPad(GCPadStatus *pad, int port)
 	if (!SlippiMatchmaking::PeppyWatchActive() || port != 0)
 		return false;
 
-	// The frame Melee will USE this pad on, not the one it is asking about.
-	// Port 0 goes through Melee's local input path, which holds a pad back by
-	// the match's input delay before applying it; port 1 arrives as a remote
-	// input and is applied straight away. Handing port 0 the current frame runs
-	// the two players out of step with each other, and the watcher simulates a
-	// match neither player played - right clock, wrong damage.
-	s32 frame = SlippiMatchmaking::PeppyWatchLocalFrame();
+	// ⚠️ Tried compensating for Melee's local input delay here -
+	// PeppyWatchLocalFrame(), which is this plus the delay - on the theory that
+	// port 0 goes through the local path and gets held back while port 1 does
+	// not. It changed nothing, so either the delay is zero in practice or the
+	// two ports are not treated as differently as that reasoning assumed.
+	s32 frame = SlippiMatchmaking::PeppyWatchFrame();
 	u8 buf[SLIPPI_PAD_FULL_SIZE] = {};
 	if (!SlippiMatchmaking::PeppyWatchPad(frame, 0, buf))
 		return false;
