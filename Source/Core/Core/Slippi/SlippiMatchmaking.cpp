@@ -1572,6 +1572,37 @@ void PeppyWatch(std::string endpoint)
 // the rest.
 namespace
 {
+// Start watching from what the heartbeat already carries.
+//
+// The watch target used to arrive only in the searching client's own tick, so
+// only somebody IN THE QUEUE was ever told who to watch - a player sitting in
+// the lobby pressed Z and got "nothing to watch yet", for ever. Nothing about
+// watching requires wanting a game.
+//
+// No new field for it: the room view names the two who are playing and carries
+// their addresses, which is the same thing the searching path reads.
+void PeppyWatchFromRoster(const json &resp)
+{
+	if (s_watching.load() || !resp.value("live", false))
+		return;
+	if (SlippiMatchmaking::PeppyInActivePair())
+		return;   // we are one of the two - there is nothing to watch
+
+	auto active = resp.find("active");
+	if (active == resp.end() || !active->is_array() || active->empty())
+		return;
+
+	std::string target = (*active)[0].value("lan", "");
+	if (target.empty())
+		target = (*active)[0].value("external", "");
+	if (target.empty())
+		return;
+
+	s_watching = true;
+	WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watching %s, from the room rather than the queue", target.c_str());
+	std::thread(PeppyWatch, target).detach();
+}
+
 void PeppyHeartbeat()
 {
 	while (s_heartbeat)
@@ -1617,6 +1648,7 @@ void PeppyHeartbeat()
 				PeppyRememberRoster(resp);
 				PeppyRememberDraft(resp);
 				PeppyShowRoom(resp, 11000);
+				PeppyWatchFromRoster(resp);
 			}
 
 			// The heartbeat is the only thing still talking to the room during a
