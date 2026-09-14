@@ -288,6 +288,7 @@ class CEXISlippi : public IEXIDevice
 	// that hangs still reports where it stopped. The game's own logging goes
 	// quiet exactly when it is most needed.
 	void PeppySceneWatch();
+	bool peppyForceMajorArmed = false;
 	std::thread m_peppySceneWatchThread;
 	bool peppySceneWatchRunning = false;
 
