@@ -1150,6 +1150,11 @@ std::vector<std::string> s_punch;
 std::atomic<int> s_pad_hit[4];
 std::atomic<int> s_pad_miss[4];
 std::atomic<int> s_pad_live[4];
+// How many frames Melee holds the local player's pad back before using it. Port
+// 0 goes through that path and port 1 does not, so the watcher has to hand port
+// 0 its inputs this far ahead or run the two players out of step with each
+// other. See PeppyWatchSetFrame.
+std::atomic<int> s_watch_delay{0};
 
 void PeppyWatchStop()
 {
@@ -1811,9 +1816,17 @@ s32 SlippiMatchmaking::PeppyWatchFrame()
 	return s_watch_frame.load();
 }
 
-void SlippiMatchmaking::PeppyWatchSetFrame(s32 frame)
+// Port 0's inputs, which Melee will hold back by the local delay before using
+// them - so hand it the frame that far ahead.
+s32 SlippiMatchmaking::PeppyWatchLocalFrame()
+{
+	return s_watch_frame.load() + s_watch_delay.load();
+}
+
+void SlippiMatchmaking::PeppyWatchSetFrame(s32 frame, u8 delay)
 {
 	s_watch_frame.store(frame);
+	s_watch_delay.store(delay);
 	s_last_frame_at.store(Common::Timer::GetTimeMs());
 
 	// Melee drives this every frame, which makes it the natural place to notice
@@ -1855,6 +1868,17 @@ bool SlippiMatchmaking::PeppyWatchPad(s32 frame, u8 idx, u8 *out)
 			s_pad_live[idx]++;
 			break;
 		}
+
+	// The inputs themselves, on a handful of fixed frames, so a watcher's copy
+	// can be held against what the players actually sent. Everything else about
+	// the watch has been reasoned about and none of it explained a divergence;
+	// this is the ground truth.
+	if (frame % 600 == 0)
+	{
+		const u8 *b = it->second[idx].data();
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] PAD watcher f%d p%d: %02x %02x %02x %02x %02x %02x %02x %02x", frame, idx,
+		         b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+	}
 	return true;
 }
 

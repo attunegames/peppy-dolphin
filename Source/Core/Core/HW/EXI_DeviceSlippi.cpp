@@ -1259,14 +1259,22 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 
 	SlippiMatchmaking::PeppyStillOnline();
 
-	// Peppy: a watcher's controller ports are fed from the timeline, and this is
-	// where we learn which frame to feed. Melee drives it; we never have to
-	// invent a clock.
-	if (SlippiMatchmaking::PeppyWatchActive())
-		SlippiMatchmaking::PeppyWatchSetFrame(frame);
 	u32 finalizedFrameChecksum = Common::swap32(&payload[8]);
 	u8 delay = payload[12];
 	u8 *inputs = &payload[13];
+
+	// Peppy: a watcher's controller ports are fed from the timeline, and this is
+	// where we learn which frame to feed. Melee drives it; we never have to
+	// invent a clock.
+	//
+	// The delay comes with it, because port 0 is fed through Melee's LOCAL input
+	// path and that path holds a pad back by this many frames before using it
+	// ("overwrite this frame's pad data with data from x frames ago"). Port 1
+	// arrives as a remote input and is not held back at all - so without
+	// compensating, a watcher runs the two players offset from each other and
+	// simulates a match neither of them played.
+	if (SlippiMatchmaking::PeppyWatchActive())
+		SlippiMatchmaking::PeppyWatchSetFrame(frame, delay);
 
 	if (frame == 1)
 	{
