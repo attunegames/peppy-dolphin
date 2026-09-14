@@ -207,8 +207,7 @@ CEXISlippi::CEXISlippi()
 		std::string target;
 		if (File::Exists(watchPath) && File::ReadFileToString(watchPath, target))
 		{
-			while (!target.empty() && (target.back() == '
-' || target.back() == '' || target.back() == ' '))
+			while (!target.empty() && (target.back() == 10 || target.back() == 13 || target.back() == 32))
 				target.pop_back();
 			auto colon = target.find(':');
 			if (colon != std::string::npos)
