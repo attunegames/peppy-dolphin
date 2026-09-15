@@ -274,6 +274,13 @@ struct PeppyConfig
 {
 	bool ok = false;
 	std::string url, key, room, name, code;
+	// TESTING ONLY, off unless peppy.json turns it on. Peppy connects people
+	// over the internet; a LAN address is not the right answer for a real match
+	// and dialling one is not free. But several clients on ONE machine have to
+	// reach each other by hairpinning out to the router and back, and plenty of
+	// routers will not do that - which leaves the whole test rig unable to
+	// connect. This puts the LAN back for that case and that case only.
+	bool lanForTesting = false;
 };
 
 PeppyConfig ReadPeppyConfig()
@@ -291,6 +298,7 @@ PeppyConfig ReadPeppyConfig()
 		cfg.room = j.value("roomCode", "");
 		cfg.name = j.value("displayName", "");
 		cfg.code = j.value("connectCode", "");
+		cfg.lanForTesting = j.value("allowLanForTesting", false);
 		// No room means Peppy is not driving this launch - fall through to the
 		// normal Slippi matchmaking rather than half-using ours.
 		cfg.ok = !cfg.url.empty() && !cfg.key.empty() && !cfg.room.empty();
@@ -777,6 +785,24 @@ static enet_uint32 getLocalAddress(ENetAddress *mm_address)
 
 	enet_socket_destroy(socket);
 	return enetAddress.host;
+}
+
+// This machine's address on its own network, with the port given. Only used
+// when allowLanForTesting is on - see PeppyConfig.
+std::string PeppyLocalEndpoint(u16 port)
+{
+	ENetAddress probe;
+	if (enet_address_set_host(&probe, PEPPY_STUN[0].host) != 0)
+		return "";
+	probe.port = PEPPY_STUN[0].port;
+
+	enet_uint32 local = getLocalAddress(&probe);
+	if (local == 0)
+		return "";
+
+	char buf[64];
+	sprintf(buf, "%s:%d", inet_ntoa(*(struct in_addr *)&local), port);
+	return buf;
 }
 
 void SlippiMatchmaking::startMatchmaking()
@@ -1862,15 +1888,11 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 			return;
 		}
 
-		// No LAN address. This build connects people over the internet, and a
-		// LAN address published here is something the room can hand out and
-		// something a client can then waste a connect timeout on.
-		//
-		// The column still exists in pd_members and is simply left null; the
-		// backend treats a missing p_lan as "unchanged", so it is sent empty
-		// rather than omitted, to clear anything an older build wrote.
+		// No LAN address, unless this is a test rig. See PeppyConfig.
+		// Sent empty rather than omitted so it clears whatever an older build
+		// wrote - the backend reads a missing p_lan as "unchanged".
 		body["p_external"] = external;
-		body["p_lan"] = "";
+		body["p_lan"] = cfg.lanForTesting ? PeppyLocalEndpoint(m_hostPort) : std::string("");
 		PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 		peppySleep();
 		return;
@@ -1921,10 +1943,21 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	}
 	m_localPlayerIndex = mine.port - 1;
 
-	// The opponent's external address, always. Two clients behind one router
-	// reach each other by hairpinning through it rather than shortcutting over
-	// the LAN - see the note on p_lan above.
-	m_remoteIps.push_back(opp.value("external", ""));
+	// The opponent's external address, always - two clients behind one router
+	// reach each other by hairpinning through it. Unless this is a test rig, in
+	// which case the router may well refuse to hairpin and the LAN address is
+	// the only way the instances can see each other at all.
+	std::string oppLan = opp.value("lan", "");
+	if (PeppyCfg().lanForTesting && !oppLan.empty())
+	{
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] allowLanForTesting: using %s instead of the external address",
+		         oppLan.c_str());
+		m_remoteIps.push_back(oppLan);
+	}
+	else
+	{
+		m_remoteIps.push_back(opp.value("external", ""));
+	}
 
 	m_allowedStages.clear();
 	m_allowedStages.push_back(0x3);  // Pokemon Stadium
@@ -2095,6 +2128,26 @@ bool PeppyAnnounceSpectateSocket(const std::string &external)
 	body["p_presence_only"] = true;
 	body["p_spectate_external"] = external;
 	return !PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken()).empty();
+}
+
+// The address SlippiSpectate should publish as its stream endpoint: normally
+// the one STUN measured, but on a test rig the LAN one, because several clients
+// on a single machine cannot reach each other through a router that will not
+// hairpin. Empty means "publish nothing", which is what a failed STUN gives.
+std::string PeppySpectateEndpointForPublish(const std::string &stunned, u16 localPort)
+{
+	if (!PeppyCfg().lanForTesting)
+		return stunned;
+
+	std::string lan = PeppyLocalEndpoint(localPort);
+	return lan.empty() ? stunned : lan;
+}
+
+// Whether the spectate socket even needs measuring - a test rig publishes its
+// LAN address, so the several seconds of STUN at startup buy nothing.
+bool PeppySpectateWantsStun()
+{
+	return !PeppyCfg().lanForTesting;
 }
 
 // PeppyStun lives in the anonymous namespace above, so it has internal linkage
