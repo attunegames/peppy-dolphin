@@ -104,6 +104,7 @@ class CEXISlippi : public IEXIDevice
 		// A peek - unlike CMD_IS_FILE_READY it does not load the game, so asking
 		// does not spend the answer the playback scene is waiting for.
 		CMD_PEPPY_REPLAY_WAITING = 0xCA,
+		CMD_PEPPY_LEAVE_PLAYBACK = 0xCB,
 
 		// Misc
 		CMD_LOG_MESSAGE = 0xD0,
@@ -202,6 +203,7 @@ class CEXISlippi : public IEXIDevice
 	    {CMD_PEPPY_LEAVE_ROOM, 1},
 	    // Peppy: no payload, the answer comes back on the read
 	    {CMD_PEPPY_REPLAY_WAITING, 0},
+	    {CMD_PEPPY_LEAVE_PLAYBACK, 0},
 
 	    // Misc
 	    {CMD_LOG_MESSAGE, 0xFFFF}, // Variable size... will only work if by itself
@@ -297,6 +299,7 @@ class CEXISlippi : public IEXIDevice
 	void prepareIsStockSteal(u8 *payload);
 	void prepareIsFileReady();
 	void preparePeppyReplayWaiting();
+	void preparePeppyLeavePlayback();
 
 	// Peppy: watches Melee's scene controller from outside the game, so a scene
 	// that hangs still reports where it stopped. The game's own logging goes
