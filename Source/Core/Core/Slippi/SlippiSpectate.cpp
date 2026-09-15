@@ -1,6 +1,11 @@
 #include "SlippiSpectate.h"
 #include "Common/CommonTypes.h"
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
+#include "Common/Thread.h"
+#include <ctime>
 #include "base64.hpp"
 #include <Core/ConfigManager.h>
 
@@ -369,5 +374,275 @@ void SlippiSpectateServer::SlippicommSocketThread(void)
 	}
 
 	enet_host_destroy(server);
+	enet_deinitialize();
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Peppy: SlippiSpectateClient - the watching half.
+//
+// The broadcaster sends each game event as a JSON envelope with the raw .slp
+// bytes base64'd into "payload", plus start_game/end_game around them. Turning
+// that back into a .slp is just: write the ubjson header, append every payload,
+// and keep the raw-length field current so a parser reading the file mid-write
+// sees a coherent size. Playback then opens it in mirror mode and treats it as
+// a replay that has not finished being written, which is what a live match is.
+////////////////////////////////////////////////////////////////////////////////
+
+SlippiSpectateClient *SlippiSpectateClient::instance_ptr()
+{
+	static SlippiSpectateClient instance;
+	return &instance;
+}
+
+SlippiSpectateClient::~SlippiSpectateClient()
+{
+	Stop();
+}
+
+void SlippiSpectateClient::Watch(const std::string &host, u16 port)
+{
+	if (m_running)
+		return;
+	m_running = true;
+	m_thread = std::thread(&SlippiSpectateClient::ClientThread, this, host, port);
+}
+
+void SlippiSpectateClient::Stop()
+{
+	m_running = false;
+	if (m_thread.joinable())
+		m_thread.join();
+	CloseReplay();
+}
+
+void SlippiSpectateClient::OpenReplay()
+{
+	CloseReplay();
+
+	std::string dir = File::GetUserPath(D_USER_IDX) + "Spectate";
+	File::CreateFullPath(dir + DIR_SEP);
+	m_replay_path = dir + DIR_SEP + "live.slp";
+
+#ifdef _WIN32
+	m_file = File::IOFile(m_replay_path, "wb", _SH_DENYNO);
+#else
+	m_file = File::IOFile(m_replay_path, "wb");
+#endif
+	if (!m_file)
+	{
+		ERROR_LOG(SLIPPI, "[Peppy] watcher could not open %s", m_replay_path.c_str());
+		return;
+	}
+
+	// Same header the recorder writes. The length stays current as we append so
+	// that a parser opening the file mid-stream sees a coherent size.
+	std::vector<u8> header({'{', 'U', 3, 'r', 'a', 'w', '[', '$', 'U', '#', 'l', 0, 0, 0, 0});
+	m_file.WriteBytes(header.data(), header.size());
+	m_written = 0;
+	m_file.Flush();
+
+	WARN_LOG(SLIPPI, "[Peppy] watching into %s", m_replay_path.c_str());
+	WriteCommFile();
+}
+
+void SlippiSpectateClient::AppendEvent(const std::string &raw)
+{
+	if (!m_file)
+		OpenReplay();
+	if (!m_file)
+		return;
+
+	m_file.WriteBytes(raw.data(), raw.size());
+	m_written += (u32)raw.size();
+
+	// Patch the raw-length field in place, then get back to the end.
+	u8 len[4] = {(u8)(m_written >> 24), (u8)((m_written >> 16) & 0xFF), (u8)((m_written >> 8) & 0xFF),
+	             (u8)(m_written & 0xFF)};
+	m_file.Seek(11, SEEK_SET);
+	m_file.WriteBytes(len, 4);
+	m_file.Seek(0, SEEK_END);
+	m_file.Flush();
+}
+
+void SlippiSpectateClient::CloseReplay()
+{
+	if (!m_file)
+		return;
+	m_file.Close();
+	m_file = nullptr;
+}
+
+void SlippiSpectateClient::WriteCommFile()
+{
+	// mirror + isRealTimeMode is what tells playback the file is still growing:
+	// it waits when it runs out rather than ending the game, and fast-forwards
+	// when it falls behind. That logic is Slippi's and is left alone.
+	json comm;
+	comm["mode"] = "mirror";
+	comm["replay"] = m_replay_path;
+	comm["isRealTimeMode"] = true;
+	comm["shouldResync"] = true;
+	comm["commandId"] = StringFromFormat("peppy-watch-%u", (u32)time(nullptr));
+
+	std::string path = SConfig::GetInstance().m_strSlippiInput;
+	if (path.empty())
+		path = "Slippi/playback.txt";
+	size_t slash = path.find_last_of("/\\");
+	if (slash != std::string::npos)
+		File::CreateFullPath(path.substr(0, slash + 1));
+	File::WriteStringToFile(comm.dump(), path);
+	WARN_LOG(SLIPPI, "[Peppy] comm file -> %s (mirror)", path.c_str());
+}
+
+void SlippiSpectateClient::HandlePacket(const char *data, u32 length)
+{
+	json msg = json::parse(std::string(data, length), nullptr, false);
+	if (msg.is_discarded() || !msg.is_object())
+		return;
+
+	if (msg.find("type") != msg.end() && msg["type"].is_string())
+	{
+		std::string type = msg["type"];
+		if (type == "connect_reply")
+		{
+			WARN_LOG(SLIPPI, "[Peppy] watcher connected, cursor %d", msg.value("cursor", 0));
+			return;
+		}
+		if (type == "start_game")
+		{
+			OpenReplay();
+			return;
+		}
+		if (type == "end_game")
+		{
+			WARN_LOG(SLIPPI, "[Peppy] broadcaster ended the game");
+			CloseReplay();
+			return;
+		}
+	}
+
+	if (msg.find("payload") == msg.end() || !msg["payload"].is_string())
+		return;
+
+	std::string decoded;
+	base64::Base64::Decode(msg["payload"].get<std::string>(), decoded);
+	if (!decoded.empty())
+		AppendEvent(decoded);
+}
+
+void SlippiSpectateClient::ClientThread(std::string host, u16 port)
+{
+	if (enet_initialize() != 0)
+	{
+		ERROR_LOG(SLIPPI, "[Peppy] watcher could not init enet");
+		m_running = false;
+		return;
+	}
+
+	ENetHost *client = enet_host_create(nullptr, 1, 3, 0, 0);
+	if (!client)
+	{
+		ERROR_LOG(SLIPPI, "[Peppy] watcher could not create host");
+		enet_deinitialize();
+		m_running = false;
+		return;
+	}
+
+	ENetAddress addr;
+	enet_address_set_host(&addr, host.c_str());
+	addr.port = port;
+
+	WARN_LOG(SLIPPI, "[Peppy] watcher dialling %s:%d", host.c_str(), port);
+
+	// Keep dialling.
+	//
+	// A watcher is usually up before the match it wants to see - that is the
+	// whole point of being queued behind one - so a single attempt is no use:
+	// the first run failed simply because the broadcaster had not started yet.
+	// The same loop covers the broadcaster restarting between games.
+	bool announced = false;
+	while (m_running)
+	{
+		ENetPeer *peer = enet_host_connect(client, &addr, 3, 0);
+		if (!peer)
+		{
+			ERROR_LOG(SLIPPI, "[Peppy] watcher has no peer slot");
+			break;
+		}
+
+		bool connected = false;
+		ENetEvent event;
+		// Give the handshake a moment before deciding nobody is home.
+		for (int waited = 0; m_running && !connected && waited < 2000; waited += 100)
+		{
+			while (enet_host_service(client, &event, 100) > 0)
+			{
+				if (event.type == ENET_EVENT_TYPE_CONNECT)
+				{
+					connected = true;
+					break;
+				}
+				if (event.type == ENET_EVENT_TYPE_RECEIVE)
+					enet_packet_destroy(event.packet);
+			}
+		}
+
+		if (!connected)
+		{
+			enet_peer_reset(peer);
+			if (!announced)
+			{
+				WARN_LOG(SLIPPI, "[Peppy] nobody broadcasting on %s:%d yet, waiting", host.c_str(), port);
+				announced = true;
+			}
+			for (int i = 0; i < 20 && m_running; i++)
+				Common::SleepCurrentThread(100);
+			continue;
+		}
+
+		announced = false;
+
+		// Ask for the whole history. Everyone starts at frame 1 and fast-forwards
+		// to live; there is no join-live path, by design.
+		json req;
+		req["type"] = "connect_request";
+		req["cursor"] = 0;
+		std::string body = req.dump();
+		ENetPacket *packet = enet_packet_create(body.data(), body.length(), ENET_PACKET_FLAG_RELIABLE);
+		enet_peer_send(peer, 0, packet);
+		enet_host_flush(client);
+		WARN_LOG(SLIPPI, "[Peppy] watcher connected, asked for the stream from the start");
+
+		bool dropped = false;
+		while (m_running && !dropped)
+		{
+			while (enet_host_service(client, &event, 100) > 0)
+			{
+				switch (event.type)
+				{
+				case ENET_EVENT_TYPE_RECEIVE:
+					HandlePacket((const char *)event.packet->data, (u32)event.packet->dataLength);
+					enet_packet_destroy(event.packet);
+					break;
+				case ENET_EVENT_TYPE_DISCONNECT:
+					WARN_LOG(SLIPPI, "[Peppy] broadcaster went away, will redial");
+					dropped = true;
+					break;
+				default:
+					break;
+				}
+			}
+		}
+
+		CloseReplay();
+		if (m_running)
+			enet_peer_reset(peer);
+		else
+			enet_peer_disconnect(peer, 0);
+	}
+
+	CloseReplay();
+	enet_host_destroy(client);
 	enet_deinitialize();
 }

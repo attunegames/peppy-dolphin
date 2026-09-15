@@ -263,6 +263,11 @@ static bool PeppyFillWatchPad(GCPadStatus *pad, int port)
 	if (!SlippiMatchmaking::PeppyWatchActive() || port != 0)
 		return false;
 
+	// ⚠️ Tried compensating for Melee's local input delay here -
+	// PeppyWatchLocalFrame(), which is this plus the delay - on the theory that
+	// port 0 goes through the local path and gets held back while port 1 does
+	// not. It changed nothing, so either the delay is zero in practice or the
+	// two ports are not treated as differently as that reasoning assumed.
 	s32 frame = SlippiMatchmaking::PeppyWatchFrame();
 	u8 buf[SLIPPI_PAD_FULL_SIZE] = {};
 	if (!SlippiMatchmaking::PeppyWatchPad(frame, 0, buf))

@@ -158,7 +158,8 @@ class SlippiMatchmaking
 	static u8 PeppyRoomModeIndex();
 
 	static s32 PeppyWatchFrame();
-	static void PeppyWatchSetFrame(s32 frame);
+	static void PeppyWatchSetFrame(s32 frame, u8 delay);
+	static s32 PeppyWatchLocalFrame();
 	// Fills SLIPPI_PAD_FULL_SIZE bytes; false when that frame is not held.
 	static bool PeppyWatchPad(s32 frame, u8 idx, u8 *out);
 	void MatchmakeThread();

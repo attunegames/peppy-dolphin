@@ -144,13 +144,19 @@ bool DolphinApp::OnInit()
 	if (m_select_slippi_spectator_port && m_slippi_spectator_port >= 1024 && m_slippi_spectator_port < 65536)
 		SConfig::GetInstance().m_spectator_local_port = m_slippi_spectator_port;
 
-#ifdef IS_PLAYBACK
+	// Peppy: the netplay build plays replays too, so it needs to know where the
+	// comm file is. Upstream only sets this in the playback build, which left
+	// SlippiReplayComm with an empty path: the file was never read, the replay
+	// path stayed empty, and isNewReplay could only ever answer false. Everything
+	// else the replay path needs is already compiled into this build.
+	//
 	// Fallback to a default config file path if the user fails to provide one
 	if (m_select_slippi_input && !m_slippi_input_name.empty())
 		SConfig::GetInstance().m_strSlippiInput = WxStrToStr(m_slippi_input_name);
 	else
 		SConfig::GetInstance().m_strSlippiInput = "Slippi/playback.txt";
 
+#ifdef IS_PLAYBACK
 	if (m_hide_seekbar) // Hide seekbar if necessary by cmd line (mostly for external recording applications)
 		SConfig::GetInstance().m_CLIHideSeekbar = true;
 
@@ -324,9 +330,10 @@ void DolphinApp::OnInitCmdLine(wxCmdLineParser &parser)
 	     wxCMD_LINE_PARAM_OPTIONAL},
 	    {wxCMD_LINE_OPTION, nullptr, "slippi-spectator-port", "Port to use for the Slippi spectate server (1024 - 65535, default: 51441)",
 	     wxCMD_LINE_VAL_NUMBER, wxCMD_LINE_PARAM_OPTIONAL},
-#ifdef IS_PLAYBACK
+	    // Peppy: available in this build too, since it plays replays as well.
 	    {wxCMD_LINE_OPTION, "i", "slippi-input", "Path to Slippi replay config file (default: Slippi/playback.txt)",
 	     wxCMD_LINE_VAL_STRING, wxCMD_LINE_PARAM_OPTIONAL},
+#ifdef IS_PLAYBACK
 	    {wxCMD_LINE_SWITCH, nullptr, "hide-seekbar", "Hide seekbar during playback", wxCMD_LINE_VAL_NONE,
 	     wxCMD_LINE_PARAM_OPTIONAL},
 	    {wxCMD_LINE_SWITCH, nullptr, "cout", "Enable cout during playback", wxCMD_LINE_VAL_NONE,
@@ -394,8 +401,8 @@ bool DolphinApp::OnCmdLineParsed(wxCmdLineParser &parser)
 	m_select_video_backend = parser.Found("video_backend", &m_video_backend_name);
 	m_select_audio_emulation = parser.Found("audio_emulation", &m_audio_emulation_name);
 	m_select_slippi_spectator_port = parser.Found("slippi-spectator-port", &m_slippi_spectator_port);
-#ifdef IS_PLAYBACK
 	m_select_slippi_input = parser.Found("slippi-input", &m_slippi_input_name);
+#ifdef IS_PLAYBACK
 	m_hide_seekbar = parser.Found("hide-seekbar");
 	m_enable_cout = parser.Found("cout");
 #endif

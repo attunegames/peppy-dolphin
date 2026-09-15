@@ -5,7 +5,9 @@
 #include <map>
 #include <thread>
 
+#include "Common/CommonTypes.h"
 #include "Common/FifoQueue.h"
+#include "Common/FileUtil.h"
 #include "nlohmann/json.hpp"
 #include <enet/enet.h>
 using json = nlohmann::json;
@@ -34,6 +36,48 @@ class SlippiSocket
 	u64 m_menu_cursor = 0;      // The latest menu event that this socket has sent
 	bool m_shook_hands = false; // Has this client shaken hands yet?
 	ENetPeer *m_peer = NULL;    // The ENet peer object for the socket
+};
+
+// Peppy: the watching half of spectating.
+//
+// SlippiSpectateServer broadcasts a match as it is played; nothing in Dolphin
+// ever consumed that stream, because in Slippi it is the Launcher that connects
+// and the playback build that watches. Here both halves live in one build, so
+// this connects to a broadcaster, turns the event stream back into a .slp on
+// disk, and points the comm file at it in mirror mode. Playback then treats it
+// as a replay that has not finished being written - which is exactly what a
+// live match is.
+class SlippiSpectateClient
+{
+  public:
+	static SlippiSpectateClient *getInstance() { return instance_ptr(); }
+	static SlippiSpectateClient *instance_ptr();
+
+	// host:port of the broadcaster's spectate server.
+	void Watch(const std::string &host, u16 port);
+	void Stop();
+	bool Active() { return m_running; }
+	// Where we are writing the stream, once a game has started.
+	std::string ReplayPath() { return m_replay_path; }
+
+  private:
+	SlippiSpectateClient() {}
+	~SlippiSpectateClient();
+	SlippiSpectateClient(SlippiSpectateClient const &) = delete;
+	void operator=(SlippiSpectateClient const &) = delete;
+
+	void ClientThread(std::string host, u16 port);
+	void HandlePacket(const char *data, u32 length);
+	void OpenReplay();
+	void AppendEvent(const std::string &raw);
+	void CloseReplay();
+	void WriteCommFile();
+
+	std::thread m_thread;
+	std::atomic<bool> m_running{false};
+	File::IOFile m_file;
+	std::string m_replay_path;
+	u32 m_written = 0;
 };
 
 class SlippiSpectateServer
