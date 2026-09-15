@@ -1294,6 +1294,28 @@ void CEXISlippi::preparePeppyReplayWaiting()
 	m_read_queue.push_back(waiting ? 1 : 0);
 }
 
+// "Should this watcher go back to the room?"
+//
+// Melee cannot answer this. It is sitting on the playback build's waiting
+// screen, which in Slippi's own build is a fine place to wait forever - there
+// is nowhere else for a playback build to be. A spectator is somebody in a
+// ROOM, and when the match they came to watch is over they are wanted back,
+// possibly as the next player. Only Dolphin knows that has happened.
+//
+// Yes when the stream has no live game: either the client has stopped (we were
+// paired, or told to stop) or the broadcaster has ended the game. A new game
+// from the same broadcaster answers CMD_IS_REPLAY_READY first, so it is taken
+// before this is ever asked.
+void CEXISlippi::preparePeppyLeavePlayback()
+{
+	m_read_queue.clear();
+
+	auto *client = SlippiSpectateClient::getInstance();
+	bool leave = !client->Active() || !client->GameInProgress();
+
+	m_read_queue.push_back(leave ? 1 : 0);
+}
+
 void CEXISlippi::prepareIsFileReady()
 {
 	m_read_queue.clear();
@@ -4060,6 +4082,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 			break;
 		case CMD_IS_FILE_READY:
 			prepareIsFileReady();
+			break;
+		case CMD_PEPPY_LEAVE_PLAYBACK:
+			preparePeppyLeavePlayback();
 			break;
 		case CMD_PEPPY_REPLAY_WAITING:
 			preparePeppyReplayWaiting();

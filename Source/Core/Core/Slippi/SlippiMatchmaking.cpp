@@ -1754,8 +1754,21 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	// this client in the queue or takes it out. Leaving the queue needs the
 	// second one - a heartbeat that cleared searching_at would drop people out
 	// of the queue while they were waiting in it.
+	//
+	// presence_only also decides whether the room tells us who is playing, and
+	// being able to WATCH should not depend on wanting to PLAY. Somebody in the
+	// lobby could not press Z at all: the watch list only comes back on a call
+	// that is not presence_only, that was only sent while queued, and without a
+	// watch target the spectate client never starts and the room never offers.
+	//
+	// Safe because pairing needs a fresh searching_at, and p_searching=false on
+	// this very call clears ours - the pairing block picks its two out of the
+	// searching set and then insists the caller is one of them, so a client
+	// that is not searching cannot be dragged into a game. Where the backend is
+	// too old to know p_searching, presence_only still has to carry the meaning
+	// and the old behaviour stands.
 	const bool queued = PeppyQueued();
-	body["p_presence_only"] = !queued;
+	body["p_presence_only"] = s_peppy_no_searching_arg ? !queued : false;
 	if (!s_peppy_no_searching_arg)
 		body["p_searching"] = queued;
 

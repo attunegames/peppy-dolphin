@@ -529,6 +529,7 @@ void SlippiSpectateClient::OpenReplay()
 	m_written = 0;
 	m_file.Flush();
 
+	m_game_in_progress = true;
 	WARN_LOG(SLIPPI, "[Peppy] watching into %s", m_replay_path.c_str());
 	WriteCommFile();
 }
@@ -554,6 +555,7 @@ void SlippiSpectateClient::AppendEvent(const std::string &raw)
 
 void SlippiSpectateClient::CloseReplay()
 {
+	m_game_in_progress = false;
 	if (!m_file)
 		return;
 	m_file.Close();

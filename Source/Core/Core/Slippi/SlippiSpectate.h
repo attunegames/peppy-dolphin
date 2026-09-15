@@ -59,6 +59,10 @@ class SlippiSpectateClient
 	void Watch(const std::string &host, u16 port);
 	void Stop();
 	bool Active() { return m_running; }
+	// Whether a game is actually being streamed right now, as opposed to the
+	// client merely being up. False before the first start_game and after each
+	// end_game, which is exactly when a watcher has nothing to look at.
+	bool GameInProgress() { return m_game_in_progress; }
 	// Where we are writing the stream, once a game has started.
 	std::string ReplayPath() { return m_replay_path; }
 
@@ -79,6 +83,7 @@ class SlippiSpectateClient
 	std::atomic<bool> m_running{false};
 	File::IOFile m_file;
 	std::string m_replay_path;
+	std::atomic<bool> m_game_in_progress{false};
 	u32 m_written = 0;
 };
 
