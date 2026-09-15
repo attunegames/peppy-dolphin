@@ -3709,9 +3709,19 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 		peppyRequeue = true;
 		peppyRequeueAt = Common::Timer::GetTimeMs();
 
-		if (matchmaking->PeppyShouldRotate() && slippi_netplay)
+		// Always. A finished game ends the session and everybody goes back to
+		// the room, whether or not anyone is waiting.
+		//
+		// This used to ask the room first and only break the pair up when
+		// somebody else wanted a turn - two people alone kept playing each
+		// other, which seemed reasonable. It is not what the room is for. The
+		// loop is meant to be: queue, get matched, play, back to the room, and
+		// the next two are matched from there. Rematching in place skips four
+		// of those five, and a spectator watching from the queue would sit
+		// through game after game without ever coming up.
+		if (slippi_netplay)
 		{
-			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Someone is waiting - ending this session");
+			WARN_LOG(SLIPPI_ONLINE, "[Peppy] Game over - everybody back to the room");
 			slippi_netplay->ForceDisconnect();
 		}
 	}
