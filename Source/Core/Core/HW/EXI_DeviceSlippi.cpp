@@ -1744,6 +1744,10 @@ static std::atomic<bool> peppyCleanupBusy(false);
 
 static u64 peppySelectionsSentAt = 0; // last time we told the opponent our character
 static bool peppyRequeue = false;
+// A Rooms game has finished and the session it belonged to has to go, so that
+// this client stops being told it has a match to play.
+static bool peppyEndSession = false;
+static u64 peppyEndSessionAt = 0;
 static u64 peppyRequeueAt = 0; // when it became due - the teardown needs a head start
 
 static void PeppyCatchUpSpeed(bool fast)
@@ -2302,6 +2306,8 @@ void CEXISlippi::startFindMatch(u8 *payload)
 	// Somebody got there before the automatic requeue did. Spend the flag rather
 	// than leave it to fire later, when it would start a search nobody asked for.
 	peppyRequeue = false;
+	// A fresh search is a fresh session; nothing left to tear down.
+	peppyEndSession = false;
 
 	// While we do have another condition that checks characters after being connected, it's nice to give
 	// someone an early error before they even queue so that they wont enter the queue and make someone
@@ -2478,6 +2484,30 @@ void CEXISlippi::handleNameEntryLoad(u8 *payload)
 void CEXISlippi::prepareOnlineMatchState()
 {
 	SlippiMatchmaking::PeppyStillOnline();
+
+	// Peppy: a finished Rooms game ends the session, here, before anything is
+	// answered.
+	//
+	// Melee asks this function whether it has a match every time it reaches the
+	// character select, and until the matchmaking state is cleared the answer is
+	// still yes - the same match, long since disconnected. So Melee starts it,
+	// it ends immediately, and the character select's request to go to the room
+	// is overruled about fifty milliseconds later by the versus splash. The log
+	// says exactly that: "character select - off to the room" every time round,
+	// and minor 04 right behind it.
+	//
+	// The old auto-requeue hid this by doing the clearing as a side effect of
+	// starting a new search. Removing it took the clearing away with it, which
+	// is why the loop outlived the removal.
+	if (peppyEndSession && !peppyCleanupBusy.load() &&
+	    Common::Timer::GetTimeMs() - peppyEndSessionAt > 250)
+	{
+		peppyEndSession = false;
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Game over - clearing the match so the room can have it");
+		handleConnectionCleanup();
+		prepareOnlineMatchState(); // answer again, with nothing to play
+		return;
+	}
 	SConfig::GetInstance().m_EmulationSpeed = 1.0f; // force 100% speed
 
 	// This match block is a VS match with P1 Red Falco vs P2 Red Bowser vs P3 Young Link vs P4 Young Link
@@ -3697,6 +3727,9 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 	{
 		bool iWon = winnerIdx == matchmaking->LocalPlayerIndex();
 		matchmaking->PeppyReportResult(matchId, iWon);
+
+		peppyEndSession = true;
+		peppyEndSessionAt = Common::Timer::GetTimeMs();
 
 		// NOT back into matchmaking. Finishing a game sends you to the ROOM,
 		// and you queue from there by pressing Start, which is where the loop
