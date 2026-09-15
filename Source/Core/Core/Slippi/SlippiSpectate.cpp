@@ -5,6 +5,8 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Thread.h"
+#include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include "base64.hpp"
 #include <Core/ConfigManager.h>
@@ -16,6 +18,12 @@
 #else
 #include <errno.h>
 #endif
+
+// Defined in SlippiMatchmaking.cpp. Declared rather than included: that header
+// includes this one, and the cycle is not worth untangling for three symbols.
+bool PeppyStun(ENetSocket sock, std::string &out);
+std::vector<std::string> PeppyPunchListForNetplay();
+void PeppyAnnounceWatchSocket(const std::string &external);
 
 // CALLED FROM DOLPHIN MAIN THREAD
 SlippiSpectateServer *SlippiSpectateServer::getInstance()
@@ -307,6 +315,7 @@ void SlippiSpectateServer::SlippicommSocketThread(void)
 	}
 
 	// Main slippicomm server loop
+	u64 last_punch = 0;
 	while (1)
 	{
 		// If we're told to stop, then quit
@@ -315,6 +324,42 @@ void SlippiSpectateServer::SlippicommSocketThread(void)
 			enet_host_destroy(server);
 			enet_deinitialize();
 			return;
+		}
+
+		// Peppy: open a hole for anyone trying to watch this match.
+		//
+		// SlippiNetplay does the same thing for the game connection, but a NAT
+		// hole belongs to ONE socket and the stream lives on this one, so that
+		// punch does nothing here. Without this the watcher's connection is an
+		// unsolicited packet at our router and gets dropped - which is why
+		// spectating worked on a LAN and nowhere else. The few bytes we send
+		// first are what let their packets land.
+		//
+		// The endpoints come from the room's heartbeat: a watcher STUNs this
+		// same kind of socket and publishes what it sees.
+		u64 punch_now = (u64)std::chrono::duration_cast<std::chrono::milliseconds>(
+		                    std::chrono::steady_clock::now().time_since_epoch())
+		                    .count();
+		if (punch_now - last_punch > 1000)
+		{
+			last_punch = punch_now;
+			for (const auto &endpoint : PeppyPunchListForNetplay())
+			{
+				auto colon = endpoint.find(':');
+				if (colon == std::string::npos)
+					continue;
+
+				ENetAddress punch_addr;
+				if (enet_address_set_host(&punch_addr, endpoint.substr(0, colon).c_str()) < 0)
+					continue;
+				punch_addr.port = (u16)atoi(endpoint.substr(colon + 1).c_str());
+
+				u8 knock = 0;
+				ENetBuffer buf;
+				buf.data = &knock;
+				buf.dataLength = sizeof(knock);
+				enet_socket_send(server->socket, &punch_addr, &buf, 1);
+			}
 		}
 
 		// Pop off any events in the queue
@@ -400,12 +445,12 @@ SlippiSpectateClient::~SlippiSpectateClient()
 	Stop();
 }
 
-void SlippiSpectateClient::Watch(const std::string &host, u16 port)
+void SlippiSpectateClient::Watch(const std::vector<std::string> &hosts, u16 port)
 {
-	if (m_running)
+	if (m_running || hosts.empty())
 		return;
 	m_running = true;
-	m_thread = std::thread(&SlippiSpectateClient::ClientThread, this, host, port);
+	m_thread = std::thread(&SlippiSpectateClient::ClientThread, this, hosts, port);
 }
 
 void SlippiSpectateClient::Stop()
@@ -531,7 +576,7 @@ void SlippiSpectateClient::HandlePacket(const char *data, u32 length)
 		AppendEvent(decoded);
 }
 
-void SlippiSpectateClient::ClientThread(std::string host, u16 port)
+void SlippiSpectateClient::ClientThread(std::vector<std::string> hosts, u16 port)
 {
 	if (enet_initialize() != 0)
 	{
@@ -549,11 +594,30 @@ void SlippiSpectateClient::ClientThread(std::string host, u16 port)
 		return;
 	}
 
-	ENetAddress addr;
-	enet_address_set_host(&addr, host.c_str());
-	addr.port = port;
+	// Measure this socket's external address and tell the room, BEFORE ENet
+	// owns the socket - once it does, a STUN reply arriving on it is just a
+	// malformed packet.
+	//
+	// The stream does not travel on the netplay socket, and a NAT hole is
+	// punched per socket, so the mapping the game already has does nothing for
+	// us. Our connection reaches the broadcaster's router as an unsolicited
+	// packet from an address it has never sent to, and dropping those is a
+	// router's whole job. The players knock first, from their own spectate
+	// socket, using the address published here.
+	std::string watchExternal;
+	if (PeppyStun(client->socket, watchExternal))
+	{
+		PeppyAnnounceWatchSocket(watchExternal);
+		WARN_LOG(SLIPPI, "[Peppy] watcher's stream socket is %s - told the room so the players can let us in",
+		         watchExternal.c_str());
+	}
+	else
+	{
+		WARN_LOG(SLIPPI, "[Peppy] no STUN answer for the stream socket - same-network only");
+	}
 
-	WARN_LOG(SLIPPI, "[Peppy] watcher dialling %s:%d", host.c_str(), port);
+	for (const auto &h : hosts)
+		WARN_LOG(SLIPPI, "[Peppy] watcher will try %s:%d", h.c_str(), port);
 
 	// Keep dialling.
 	//
@@ -561,9 +625,28 @@ void SlippiSpectateClient::ClientThread(std::string host, u16 port)
 	// whole point of being queued behind one - so a single attempt is no use:
 	// the first run failed simply because the broadcaster had not started yet.
 	// The same loop covers the broadcaster restarting between games.
+	//
+	// Candidates are tried in order, LAN before external: whichever of the two
+	// is reachable answers, and the unreachable one costs one two-second
+	// timeout. That is cheaper than working out the network topology from the
+	// room's records, which a queued watcher does not have.
 	bool announced = false;
+	size_t next_host = 0;
 	while (m_running)
 	{
+		const std::string &host = hosts[next_host % hosts.size()];
+		bool last_candidate = (next_host % hosts.size()) == hosts.size() - 1;
+		next_host++;
+
+		ENetAddress addr;
+		if (enet_address_set_host(&addr, host.c_str()) < 0)
+		{
+			ERROR_LOG(SLIPPI, "[Peppy] watcher cannot resolve %s", host.c_str());
+			Common::SleepCurrentThread(500);
+			continue;
+		}
+		addr.port = port;
+
 		ENetPeer *peer = enet_host_connect(client, &addr, 3, 0);
 		if (!peer)
 		{
@@ -591,11 +674,20 @@ void SlippiSpectateClient::ClientThread(std::string host, u16 port)
 		if (!connected)
 		{
 			enet_peer_reset(peer);
+			if (!last_candidate)
+				continue; // try the other address before deciding nobody is home
+
 			if (!announced)
 			{
-				WARN_LOG(SLIPPI, "[Peppy] nobody broadcasting on %s:%d yet, waiting", host.c_str(), port);
+				WARN_LOG(SLIPPI, "[Peppy] nobody broadcasting on port %d yet, waiting", port);
 				announced = true;
 			}
+
+			// Re-publish while we wait. The mapping can be rebound, and the
+			// players only knock at what the room last told them.
+			if (!watchExternal.empty())
+				PeppyAnnounceWatchSocket(watchExternal);
+
 			for (int i = 0; i < 20 && m_running; i++)
 				Common::SleepCurrentThread(100);
 			continue;
