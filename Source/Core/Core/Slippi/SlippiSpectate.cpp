@@ -25,6 +25,8 @@ bool PeppyStunForSpectate(ENetSocket sock, std::string &out);
 std::vector<std::string> PeppyPunchListForNetplay();
 void PeppyAnnounceWatchSocket(const std::string &external);
 bool PeppyAnnounceSpectateSocket(const std::string &external);
+std::string PeppySpectateEndpointForPublish(const std::string &stunned, u16 localPort);
+bool PeppySpectateWantsStun();
 
 // CALLED FROM DOLPHIN MAIN THREAD
 SlippiSpectateServer *SlippiSpectateServer::getInstance()
@@ -324,11 +326,16 @@ void SlippiSpectateServer::SlippicommSocketThread(void)
 	// the port is configured differently (several clients on one machine must
 	// differ) and wrong again across the internet, where what matters is the
 	// port our NAT mapped rather than the one we bound.
-	std::string spectateExternal;
-	if (PeppyStunForSpectate(server->socket, spectateExternal))
+	std::string stunned;
+	if (PeppySpectateWantsStun())
+	{
+		if (!PeppyStunForSpectate(server->socket, stunned))
+			ERROR_LOG(SLIPPI, "[Peppy] no STUN answer for the stream socket - nobody will be able to watch");
+	}
+
+	std::string spectateExternal = PeppySpectateEndpointForPublish(stunned, server_address.port);
+	if (!spectateExternal.empty())
 		WARN_LOG(SLIPPI, "[Peppy] stream is served from %s", spectateExternal.c_str());
-	else
-		ERROR_LOG(SLIPPI, "[Peppy] no STUN answer for the stream socket - nobody will be able to watch");
 
 	// Main slippicomm server loop
 	u64 last_punch = 0;
@@ -640,7 +647,12 @@ void SlippiSpectateClient::ClientThread(std::string host, u16 port)
 	// router's whole job. The players knock first, from their own spectate
 	// socket, using the address published here.
 	std::string watchExternal;
-	if (PeppyStunForSpectate(client->socket, watchExternal))
+	if (!PeppySpectateWantsStun())
+	{
+		// A test rig is all one machine: nothing to punch, and the several
+		// seconds STUN takes would only delay the first dial.
+	}
+	else if (PeppyStunForSpectate(client->socket, watchExternal))
 	{
 		PeppyAnnounceWatchSocket(watchExternal);
 		WARN_LOG(SLIPPI, "[Peppy] watcher's stream socket is %s - told the room so the players can let us in",
