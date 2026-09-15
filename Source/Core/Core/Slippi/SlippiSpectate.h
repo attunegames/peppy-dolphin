@@ -55,9 +55,8 @@ class SlippiSpectateClient
 	static SlippiSpectateClient *getInstance() { return instance_ptr(); }
 	static SlippiSpectateClient *instance_ptr();
 
-	// The broadcaster's spectate server. Candidate hosts are tried in order
-	// (LAN before external), all on the same port.
-	void Watch(const std::vector<std::string> &hosts, u16 port);
+	// The broadcaster's spectate server - their external host, and that port.
+	void Watch(const std::string &host, u16 port);
 	void Stop();
 	bool Active() { return m_running; }
 	// Where we are writing the stream, once a game has started.
@@ -69,7 +68,7 @@ class SlippiSpectateClient
 	SlippiSpectateClient(SlippiSpectateClient const &) = delete;
 	void operator=(SlippiSpectateClient const &) = delete;
 
-	void ClientThread(std::vector<std::string> hosts, u16 port);
+	void ClientThread(std::string host, u16 port);
 	void HandlePacket(const char *data, u32 length);
 	void OpenReplay();
 	void AppendEvent(const std::string &raw);
