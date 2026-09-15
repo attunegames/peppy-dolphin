@@ -1815,10 +1815,24 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 		auto watch = resp.find("watch");
 		if (!s_watching && watch != resp.end() && watch->is_array() && watch->size() > 0)
 		{
-			std::string target = (*watch)[0].value("lan", "");
-			if (target.empty())
-				target = (*watch)[0].value("external", "");
-			if (!target.empty())
+			// BOTH addresses, LAN first - do not pick one here.
+			//
+			// This used to take "lan" whenever it was present, which sent a
+			// watcher on another network to the broadcaster's 192.168.x.x and
+			// reached nothing. The players choose between the two by comparing
+			// external IPs, but they do that with both sides' records in hand;
+			// a watcher in the queue has never run the stun branch and so has
+			// no record of its own external address to compare against. Dialling
+			// each in turn needs no such knowledge, and the connect attempt
+			// already gives up after two seconds.
+			std::vector<std::string> targets;
+			std::string tgtLan = (*watch)[0].value("lan", "");
+			std::string tgtExternal = (*watch)[0].value("external", "");
+			if (!tgtLan.empty())
+				targets.push_back(tgtLan);
+			if (!tgtExternal.empty())
+				targets.push_back(tgtExternal);
+			if (!targets.empty())
 			{
 				// Peppy: watch by playing the broadcaster's stream, not by
 				// relaying their pads.
@@ -1832,10 +1846,13 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 				// The target names their netplay socket. The spectate server is
 				// a different port on the same host - SlippiSpectatorLocalPort,
 				// 51441 unless the room says otherwise.
-				std::string host = target.substr(0, target.find(':'));
+				std::vector<std::string> hosts;
+				for (const auto &t : targets)
+					hosts.push_back(t.substr(0, t.find(':')));
+
 				u16 sport = (u16)(*watch)[0].value("spectate_port", 51441);
 				s_watching = true;
-				SlippiSpectateClient::getInstance()->Watch(host, sport);
+				SlippiSpectateClient::getInstance()->Watch(hosts, sport);
 			}
 		}
 		peppySleep();
@@ -2084,6 +2101,28 @@ std::vector<std::string> SlippiMatchmaking::PeppyPunchList()
 std::vector<std::string> PeppyPunchListForNetplay()
 {
 	return SlippiMatchmaking::PeppyPunchList();
+}
+
+// Tell the room the external address of the socket a watcher's STREAM arrives
+// on, so the players can knock a hole for it.
+//
+// This exists because the stream does NOT share the netplay socket. A hole is
+// punched per socket, so the mapping the players already have - for the game
+// itself - does nothing for the stream, and the watcher's connection reaches
+// the broadcaster's router as an unsolicited packet it is built to drop.
+// Called from SlippiSpectate.cpp; free, for the same include-cycle reason.
+void PeppyAnnounceWatchSocket(const std::string &external)
+{
+	if (external.empty() || !PeppyReady())
+		return;
+
+	json body;
+	body["p_room"] = PeppyRoom();
+	body["p_name"] = PeppyCfg().name;
+	body["p_code"] = PeppyCfg().code;
+	body["p_presence_only"] = true; // saying where we are, not asking for a game
+	body["p_watch_external"] = external;
+	PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 }
 
 void SlippiMatchmaking::PeppyWatchSetMatchLatch(bool watched)
