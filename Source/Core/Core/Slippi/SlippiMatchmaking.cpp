@@ -521,12 +521,6 @@ std::string PeppyCrowned(const json &member)
 	return name;
 }
 
-std::string PeppyIpOf(const std::string &endpoint)
-{
-	auto colon = endpoint.find(':');
-	return colon == std::string::npos ? endpoint : endpoint.substr(0, colon);
-}
-
 // The room panel. Drawn by Dolphin over the game rather than by Melee, because a
 // native screen means artwork and assembly - this is readable today and costs
 // nothing that a native version would have to undo later.
@@ -1792,8 +1786,6 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	if (state == "waiting")
 	{
 		// Queued behind a match in progress: attach to it as a read-only peer.
-		// Prefer the LAN address when we share a public IP with them, exactly as
-		// the players do with each other.
 		// The players' names, so the watcher's HUD says who is playing rather than
 		// leaving the tags blank. The room already reports the pair in order -
 		// host first - which is the same order as the player indices.
@@ -1815,24 +1807,15 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 		auto watch = resp.find("watch");
 		if (!s_watching && watch != resp.end() && watch->is_array() && watch->size() > 0)
 		{
-			// BOTH addresses, LAN first - do not pick one here.
+			// The external address, and ONLY the external address.
 			//
-			// This used to take "lan" whenever it was present, which sent a
-			// watcher on another network to the broadcaster's 192.168.x.x and
-			// reached nothing. The players choose between the two by comparing
-			// external IPs, but they do that with both sides' records in hand;
-			// a watcher in the queue has never run the stun branch and so has
-			// no record of its own external address to compare against. Dialling
-			// each in turn needs no such knowledge, and the connect attempt
-			// already gives up after two seconds.
-			std::vector<std::string> targets;
-			std::string tgtLan = (*watch)[0].value("lan", "");
-			std::string tgtExternal = (*watch)[0].value("external", "");
-			if (!tgtLan.empty())
-				targets.push_back(tgtLan);
-			if (!tgtExternal.empty())
-				targets.push_back(tgtExternal);
-			if (!targets.empty())
+			// This build is for people playing each other over the internet, so
+			// the LAN address is never the right answer and trying it is not
+			// free: a watcher on another network dialled the broadcaster's
+			// 192.168.x.x, waited out the connect timeout, and only then tried
+			// the address that works. Every internet spectate paid that.
+			std::string target = (*watch)[0].value("external", "");
+			if (!target.empty())
 			{
 				// Peppy: watch by playing the broadcaster's stream, not by
 				// relaying their pads.
@@ -1846,13 +1829,10 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 				// The target names their netplay socket. The spectate server is
 				// a different port on the same host - SlippiSpectatorLocalPort,
 				// 51441 unless the room says otherwise.
-				std::vector<std::string> hosts;
-				for (const auto &t : targets)
-					hosts.push_back(t.substr(0, t.find(':')));
-
+				std::string host = target.substr(0, target.find(':'));
 				u16 sport = (u16)(*watch)[0].value("spectate_port", 51441);
 				s_watching = true;
-				SlippiSpectateClient::getInstance()->Watch(hosts, sport);
+				SlippiSpectateClient::getInstance()->Watch(host, sport);
 			}
 		}
 		peppySleep();
@@ -1879,20 +1859,15 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 			return;
 		}
 
-		// The LAN address lets two players behind one router skip the internet
-		// entirely, exactly as Slippi does it.
-		char lanAddr[64] = "";
-		ENetAddress probe;
-		if (enet_address_set_host(&probe, PEPPY_STUN[0].host) == 0)
-		{
-			probe.port = PEPPY_STUN[0].port;
-			enet_uint32 local = getLocalAddress(&probe);
-			if (local != 0)
-				sprintf(lanAddr, "%s:%d", inet_ntoa(*(struct in_addr *)&local), m_hostPort);
-		}
-
+		// No LAN address. This build connects people over the internet, and a
+		// LAN address published here is something the room can hand out and
+		// something a client can then waste a connect timeout on.
+		//
+		// The column still exists in pd_members and is simply left null; the
+		// backend treats a missing p_lan as "unchanged", so it is sent empty
+		// rather than omitted, to clear anything an older build wrote.
 		body["p_external"] = external;
-		body["p_lan"] = std::string(lanAddr);
+		body["p_lan"] = "";
 		PeppyPost(cfg.url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken());
 		peppySleep();
 		return;
@@ -1943,14 +1918,10 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 	}
 	m_localPlayerIndex = mine.port - 1;
 
-	std::string myExternal = me.value("external", "");
-	std::string oppExternal = opp.value("external", "");
-	std::string oppLan = opp.value("lan", "");
-
-	if (!oppLan.empty() && PeppyIpOf(myExternal) == PeppyIpOf(oppExternal))
-		m_remoteIps.push_back(oppLan);
-	else
-		m_remoteIps.push_back(oppExternal);
+	// The opponent's external address, always. Two clients behind one router
+	// reach each other by hairpinning through it rather than shortcutting over
+	// the LAN - see the note on p_lan above.
+	m_remoteIps.push_back(opp.value("external", ""));
 
 	m_allowedStages.clear();
 	m_allowedStages.push_back(0x3);  // Pokemon Stadium

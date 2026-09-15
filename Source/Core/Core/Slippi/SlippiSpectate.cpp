@@ -445,12 +445,12 @@ SlippiSpectateClient::~SlippiSpectateClient()
 	Stop();
 }
 
-void SlippiSpectateClient::Watch(const std::vector<std::string> &hosts, u16 port)
+void SlippiSpectateClient::Watch(const std::string &host, u16 port)
 {
-	if (m_running || hosts.empty())
+	if (m_running || host.empty())
 		return;
 	m_running = true;
-	m_thread = std::thread(&SlippiSpectateClient::ClientThread, this, hosts, port);
+	m_thread = std::thread(&SlippiSpectateClient::ClientThread, this, host, port);
 }
 
 void SlippiSpectateClient::Stop()
@@ -576,7 +576,7 @@ void SlippiSpectateClient::HandlePacket(const char *data, u32 length)
 		AppendEvent(decoded);
 }
 
-void SlippiSpectateClient::ClientThread(std::vector<std::string> hosts, u16 port)
+void SlippiSpectateClient::ClientThread(std::string host, u16 port)
 {
 	if (enet_initialize() != 0)
 	{
@@ -613,11 +613,22 @@ void SlippiSpectateClient::ClientThread(std::vector<std::string> hosts, u16 port
 	}
 	else
 	{
-		WARN_LOG(SLIPPI, "[Peppy] no STUN answer for the stream socket - same-network only");
+		ERROR_LOG(SLIPPI, "[Peppy] no STUN answer for the stream socket - the players cannot be told where to "
+		                  "knock, so this will only connect if their router lets strangers in");
 	}
 
-	for (const auto &h : hosts)
-		WARN_LOG(SLIPPI, "[Peppy] watcher will try %s:%d", h.c_str(), port);
+	ENetAddress addr;
+	if (enet_address_set_host(&addr, host.c_str()) < 0)
+	{
+		ERROR_LOG(SLIPPI, "[Peppy] watcher cannot resolve %s", host.c_str());
+		enet_host_destroy(client);
+		enet_deinitialize();
+		m_running = false;
+		return;
+	}
+	addr.port = port;
+
+	WARN_LOG(SLIPPI, "[Peppy] watcher dialling %s:%d", host.c_str(), port);
 
 	// Keep dialling.
 	//
@@ -625,28 +636,9 @@ void SlippiSpectateClient::ClientThread(std::vector<std::string> hosts, u16 port
 	// whole point of being queued behind one - so a single attempt is no use:
 	// the first run failed simply because the broadcaster had not started yet.
 	// The same loop covers the broadcaster restarting between games.
-	//
-	// Candidates are tried in order, LAN before external: whichever of the two
-	// is reachable answers, and the unreachable one costs one two-second
-	// timeout. That is cheaper than working out the network topology from the
-	// room's records, which a queued watcher does not have.
 	bool announced = false;
-	size_t next_host = 0;
 	while (m_running)
 	{
-		const std::string &host = hosts[next_host % hosts.size()];
-		bool last_candidate = (next_host % hosts.size()) == hosts.size() - 1;
-		next_host++;
-
-		ENetAddress addr;
-		if (enet_address_set_host(&addr, host.c_str()) < 0)
-		{
-			ERROR_LOG(SLIPPI, "[Peppy] watcher cannot resolve %s", host.c_str());
-			Common::SleepCurrentThread(500);
-			continue;
-		}
-		addr.port = port;
-
 		ENetPeer *peer = enet_host_connect(client, &addr, 3, 0);
 		if (!peer)
 		{
@@ -674,12 +666,9 @@ void SlippiSpectateClient::ClientThread(std::vector<std::string> hosts, u16 port
 		if (!connected)
 		{
 			enet_peer_reset(peer);
-			if (!last_candidate)
-				continue; // try the other address before deciding nobody is home
-
 			if (!announced)
 			{
-				WARN_LOG(SLIPPI, "[Peppy] nobody broadcasting on port %d yet, waiting", port);
+				WARN_LOG(SLIPPI, "[Peppy] nobody broadcasting on %s:%d yet, waiting", host.c_str(), port);
 				announced = true;
 			}
 
