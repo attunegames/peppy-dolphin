@@ -1807,14 +1807,12 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 		auto watch = resp.find("watch");
 		if (!s_watching && watch != resp.end() && watch->is_array() && watch->size() > 0)
 		{
-			// The external address, and ONLY the external address.
-			//
-			// This build is for people playing each other over the internet, so
-			// the LAN address is never the right answer and trying it is not
-			// free: a watcher on another network dialled the broadcaster's
-			// 192.168.x.x, waited out the connect timeout, and only then tried
-			// the address that works. Every internet spectate paid that.
-			std::string target = (*watch)[0].value("external", "");
+			// Where the broadcaster says its stream is - host AND port, both
+			// measured by them. Never their netplay address with a guessed port
+			// on the end, and never their LAN address: this build is for people
+			// playing each other over the internet, so a LAN address is not the
+			// right answer and dialling one is not free.
+			std::string target = (*watch)[0].value("spectate", "");
 			if (!target.empty())
 			{
 				// Peppy: watch by playing the broadcaster's stream, not by
@@ -1826,13 +1824,18 @@ void SlippiMatchmaking::handlePeppyMatchmaking()
 				// already broadcasts carries the match itself, and Slippi's own
 				// replay code plays it, so nothing here simulates anything.
 				//
-				// The target names their netplay socket. The spectate server is
-				// a different port on the same host - SlippiSpectatorLocalPort,
-				// 51441 unless the room says otherwise.
-				std::string host = target.substr(0, target.find(':'));
-				u16 sport = (u16)(*watch)[0].value("spectate_port", 51441);
-				s_watching = true;
-				SlippiSpectateClient::getInstance()->Watch(host, sport);
+				auto colon = target.rfind(':');
+				if (colon == std::string::npos)
+				{
+					ERROR_LOG(SLIPPI_ONLINE, "[Peppy] watch target is not host:port - %s", target.c_str());
+				}
+				else
+				{
+					std::string host = target.substr(0, colon);
+					u16 sport = (u16)atoi(target.substr(colon + 1).c_str());
+					s_watching = true;
+					SlippiSpectateClient::getInstance()->Watch(host, sport);
+				}
 			}
 		}
 		peppySleep();
@@ -2072,6 +2075,26 @@ std::vector<std::string> SlippiMatchmaking::PeppyPunchList()
 std::vector<std::string> PeppyPunchListForNetplay()
 {
 	return SlippiMatchmaking::PeppyPunchList();
+}
+
+// Tell the room where this client serves its spectate stream from.
+//
+// The watcher used to take our netplay address, throw away the port and assume
+// 51441. That is wrong twice over: the port is configurable and must differ
+// when several clients share a machine, and across the internet the port that
+// matters is the one our NAT mapped, which only a STUN reply can tell us.
+bool PeppyAnnounceSpectateSocket(const std::string &external)
+{
+	if (external.empty() || !PeppyReady())
+		return false;
+
+	json body;
+	body["p_room"] = PeppyRoom();
+	body["p_name"] = PeppyCfg().name;
+	body["p_code"] = PeppyCfg().code;
+	body["p_presence_only"] = true;
+	body["p_spectate_external"] = external;
+	return !PeppyPost(PeppyCfg().url + "/rest/v1/rpc/pd_tick", body.dump(), PeppyToken()).empty();
 }
 
 // PeppyStun lives in the anonymous namespace above, so it has internal linkage

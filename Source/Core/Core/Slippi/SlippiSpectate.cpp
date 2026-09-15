@@ -24,6 +24,7 @@
 bool PeppyStunForSpectate(ENetSocket sock, std::string &out);
 std::vector<std::string> PeppyPunchListForNetplay();
 void PeppyAnnounceWatchSocket(const std::string &external);
+bool PeppyAnnounceSpectateSocket(const std::string &external);
 
 // CALLED FROM DOLPHIN MAIN THREAD
 SlippiSpectateServer *SlippiSpectateServer::getInstance()
@@ -314,8 +315,25 @@ void SlippiSpectateServer::SlippicommSocketThread(void)
 		return;
 	}
 
+	// Measure THIS socket and tell the room, before the service loop below
+	// starts reading it - a STUN reply that lands once ENet is servicing the
+	// socket is just a malformed packet to it.
+	//
+	// A watcher cannot work our stream address out for itself. It used to take
+	// our netplay address, drop the port and assume 51441, which is wrong when
+	// the port is configured differently (several clients on one machine must
+	// differ) and wrong again across the internet, where what matters is the
+	// port our NAT mapped rather than the one we bound.
+	std::string spectateExternal;
+	if (PeppyStunForSpectate(server->socket, spectateExternal))
+		WARN_LOG(SLIPPI, "[Peppy] stream is served from %s", spectateExternal.c_str());
+	else
+		ERROR_LOG(SLIPPI, "[Peppy] no STUN answer for the stream socket - nobody will be able to watch");
+
 	// Main slippicomm server loop
 	u64 last_punch = 0;
+	u64 last_publish = 0;
+	bool published = false;
 	while (1)
 	{
 		// If we're told to stop, then quit
@@ -340,6 +358,23 @@ void SlippiSpectateServer::SlippicommSocketThread(void)
 		u64 punch_now = (u64)std::chrono::duration_cast<std::chrono::milliseconds>(
 		                    std::chrono::steady_clock::now().time_since_epoch())
 		                    .count();
+
+		// Keep republishing. This thread starts with Dolphin, long before there
+		// is a room to publish to, so the early attempts are no-ops and only a
+		// later one lands - hence retrying every few seconds until one does,
+		// rather than making somebody who just joined a room wait out a long
+		// interval before anyone can watch them. Afterwards it is only keeping
+		// the record fresh, so it backs off.
+		if (!spectateExternal.empty() && punch_now - last_publish > (published ? 30000u : 5000u))
+		{
+			last_publish = punch_now;
+			if (PeppyAnnounceSpectateSocket(spectateExternal) && !published)
+			{
+				published = true;
+				WARN_LOG(SLIPPI, "[Peppy] room told the stream is at %s", spectateExternal.c_str());
+			}
+		}
+
 		if (punch_now - last_punch > 1000)
 		{
 			last_punch = punch_now;
