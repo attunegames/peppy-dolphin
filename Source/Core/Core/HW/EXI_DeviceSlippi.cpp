@@ -1310,6 +1310,11 @@ void CEXISlippi::preparePeppyLeavePlayback()
 {
 	m_read_queue.clear();
 
+	// Asked every frame from the waiting screen, so it also serves as proof that
+	// a watcher is still here - the online-mode watchdog is fed by things only a
+	// player does, and would otherwise sweep a spectator out of the room.
+	SlippiMatchmaking::PeppyStillOnline();
+
 	auto *client = SlippiSpectateClient::getInstance();
 	bool leave = !client->Active() || !client->GameInProgress();
 

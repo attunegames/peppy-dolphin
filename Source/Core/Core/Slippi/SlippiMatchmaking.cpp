@@ -1632,6 +1632,22 @@ void PeppyHeartbeat()
 		// Being in a room means being in online mode, not merely having Dolphin
 		// open. Without this the heartbeat kept a player who had backed out in
 		// the queue, and the room went on pairing them.
+		// Watching is being in the room, not having left it.
+		//
+		// This timestamp is refreshed by the two things an online MATCH does -
+		// handing over inputs and preparing match state - and a spectator does
+		// neither. It sits in the playback scene instead, so ten seconds in it
+		// was swept out of the room it was still very much part of, and when the
+		// match ended it came back to a room that no longer knew it. That is
+		// where PeppyRoom.dat crashed.
+		//
+		// Refreshed rather than skipped. Skipping the check while watching would
+		// leave the timestamp stale, so the moment the stream ended and the
+		// watcher came back the check would run against a reading from before it
+		// ever started watching and drop it on the spot - the same bug, moved.
+		if (SlippiSpectateClient::getInstance()->Active())
+			s_online_alive.store(Common::Timer::GetTimeMs());
+
 		u64 alive = s_online_alive.load();
 		if (alive != 0 && Common::Timer::GetTimeMs() - alive > 10000)
 		{
