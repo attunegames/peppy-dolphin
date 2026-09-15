@@ -188,6 +188,42 @@ CEXISlippi::CEXISlippi()
 	// Forces savestate to re-init regions when a new ISO is loaded
 	SlippiSavestate::shouldForceInit = true;
 
+	// Peppy: start the scene watcher (see PeppySceneWatch).
+	peppySceneWatchRunning = true;
+	m_peppySceneWatchThread = std::thread(&CEXISlippi::PeppySceneWatch, this);
+
+	// Peppy: spectate a broadcaster named in User/Config/peppy-watch.txt.
+	//
+	// One line, host:port of their spectate server (SlippiSpectatorLocalPort,
+	// 51441 by default; --slippi-spectator-port gives each local instance its
+	// own). The client turns their stream back into a .slp and points the comm
+	// file at it in mirror mode, and the game's own handover does the rest.
+	//
+	// A file rather than the backend for now: it makes spectating testable with
+	// one machine and no second player, since playback re-records and therefore
+	// broadcasts too.
+	{
+		std::string watchPath = File::GetUserPath(D_CONFIG_IDX) + "peppy-watch.txt";
+		std::string target;
+		if (File::Exists(watchPath) && File::ReadFileToString(watchPath, target))
+		{
+			while (!target.empty() && (target.back() == 10 || target.back() == 13 || target.back() == 32))
+				target.pop_back();
+			auto colon = target.find(':');
+			if (colon != std::string::npos)
+			{
+				std::string host = target.substr(0, colon);
+				u16 port = (u16)atoi(target.substr(colon + 1).c_str());
+				WARN_LOG(SLIPPI, "[Peppy] spectating %s:%d", host.c_str(), port);
+				SlippiSpectateClient::getInstance()->Watch(host, port);
+			}
+			else
+			{
+				ERROR_LOG(SLIPPI, "[Peppy] peppy-watch.txt should be host:port, got '%s'", target.c_str());
+			}
+		}
+	}
+
 	// Update user file and then listen for User
 #ifndef IS_PLAYBACK
 	user->ListenForLogIn();
@@ -216,6 +252,14 @@ CEXISlippi::~CEXISlippi()
 	// suddenly stops. This would happen often on netplay when the opponent
 	// would close the emulation before the file successfully finished writing
 	writeToFileAsync(&empty[0], 0, "close");
+	SlippiSpectateClient::getInstance()->Stop();
+
+	peppySceneWatchRunning = false;
+	if (m_peppySceneWatchThread.joinable())
+	{
+		m_peppySceneWatchThread.join();
+	}
+
 	writeThreadRunning = false;
 	if (m_fileWriteThread.joinable())
 	{
@@ -1190,6 +1234,66 @@ void CEXISlippi::prepareIsStockSteal(u8 *payload)
 	m_read_queue.push_back(playerIsBack);
 }
 
+// Peppy: report Melee's scene controller whenever it changes.
+//
+// When a scene handover goes wrong the game stops logging, because the code that
+// would have logged is in the scene that never started. Watching the controller
+// from this side keeps reporting regardless: 0x80479D30 is major, pending major,
+// unknown, minor, unknown, pending minor - and a scene that is stuck shows up as
+// a value that arrives and then never changes again.
+void CEXISlippi::PeppySceneWatch()
+{
+	u32 last = 0xFFFFFFFF;
+	u32 lastPending = 0xFFFFFFFF;
+	while (peppySceneWatchRunning)
+	{
+		if (Memory::IsInitialized())
+		{
+			u32 now = Memory::Read_U32(0x80479D30);
+			u32 pending = Memory::Read_U32(0x80479D34);
+
+			// The forcing probe that used to live here is gone. It answered its
+			// question: the game does not read pending-major to choose the next
+			// major. It went to 18 with 0e sitting in that byte, then overwrote
+			// the byte with 18 itself. The destination comes from somewhere else
+			// entirely, so no amount of writing here - from the game or from
+			// out here - can steer it.
+			//
+			// What does work is the pair Peppy already uses to leave the online
+			// major for the menu. It works from Peppy's own major and not from
+			// Melee's main menu, which decides its own destination. So the
+			// handover belongs inside the online major, which is also where the
+			// real trigger lives: you start spectating because you are queued.
+			if (now != last || pending != lastPending)
+			{
+				last = now;
+				lastPending = pending;
+				WARN_LOG(SLIPPI, "[Peppy] scene: major %02x pending-major %02x minor %02x "
+				                 "prev-minor %02x pending-minor %02x",
+				         (now >> 24) & 0xFF, (now >> 16) & 0xFF, now & 0xFF,
+				         (pending >> 24) & 0xFF, (pending >> 16) & 0xFF);
+			}
+		}
+		Common::SleepCurrentThread(100);
+	}
+}
+
+// Peppy: a peek at whether a replay is queued.
+//
+// The menu needs to know whether to leave for the playback scene, but it cannot
+// ask CMD_IS_FILE_READY to find out: that one loads the game and records it as
+// played, so the playback scene's own poll would then be told "no" forever and
+// sit on the waiting screen. isNewReplay only reads the comm file and compares,
+// so asking it costs nothing.
+void CEXISlippi::preparePeppyReplayWaiting()
+{
+	m_read_queue.clear();
+	bool waiting = g_replayComm->isNewReplay();
+	WARN_LOG(SLIPPI, "[Peppy] Replay waiting? %s (%s)", waiting ? "yes" : "no",
+	         g_replayComm->getSettings().replayPath.c_str());
+	m_read_queue.push_back(waiting ? 1 : 0);
+}
+
 void CEXISlippi::prepareIsFileReady()
 {
 	m_read_queue.clear();
@@ -1272,14 +1376,22 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 
 	SlippiMatchmaking::PeppyStillOnline();
 
-	// Peppy: a watcher's controller ports are fed from the timeline, and this is
-	// where we learn which frame to feed. Melee drives it; we never have to
-	// invent a clock.
-	if (SlippiMatchmaking::PeppyWatchActive())
-		SlippiMatchmaking::PeppyWatchSetFrame(frame);
 	u32 finalizedFrameChecksum = Common::swap32(&payload[8]);
 	u8 delay = payload[12];
 	u8 *inputs = &payload[13];
+
+	// Peppy: a watcher's controller ports are fed from the timeline, and this is
+	// where we learn which frame to feed. Melee drives it; we never have to
+	// invent a clock.
+	//
+	// The delay comes with it, because port 0 is fed through Melee's LOCAL input
+	// path and that path holds a pad back by this many frames before using it
+	// ("overwrite this frame's pad data with data from x frames ago"). Port 1
+	// arrives as a remote input and is not held back at all - so without
+	// compensating, a watcher runs the two players offset from each other and
+	// simulates a match neither of them played.
+	if (SlippiMatchmaking::PeppyWatchActive())
+		SlippiMatchmaking::PeppyWatchSetFrame(frame, delay);
 
 	if (frame == 1)
 	{
@@ -1800,6 +1912,14 @@ bool CEXISlippi::shouldAdvanceOnlineFrame(s32 frame)
 
 void CEXISlippi::handleSendInputs(s32 frame, u8 delay, s32 checksumFrame, u32 checksum, u8 *inputs)
 {
+	// What this client is actually sending, on the same early frames the watcher
+	// logs what it received. Holding the two side by side is the only way left
+	// to tell whether a watcher's divergence is bad inputs or something after
+	// them - every other check has come back clean.
+	if (frame <= 600 && frame % 60 == 0)
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] PAD sent f%d: %02x %02x %02x %02x %02x %02x %02x %02x (delay %d)", frame,
+		         inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], inputs[6], inputs[7], delay);
+
 	// On the first frame sent, we need to queue up empty dummy pads for as many
 	//	frames as we have delay
 	if (frame == 1)
@@ -3113,7 +3233,15 @@ void CEXISlippi::prepareOnlineMatchState()
 	// this on its own: a pair that has been introduced but has not started yet
 	// fills the two active slots and is still nothing to watch.
 	u8 roomFlags = 0;
-	if (SlippiMatchmaking::PeppyWatchActive() && SlippiMatchmaking::PeppyWatchReady())
+	// Peppy: watchable means the spectate client has a stream with a game in it.
+	//
+	// This used to ask the old pad-relay watch whether it was active and ready.
+	// That path is retired - a watcher plays the broadcaster's stream now - so
+	// the question is whether the stream has arrived and produced a replay file
+	// to play. The room only offers to watch on this flag, so it has to follow
+	// the mechanism that actually does the watching.
+	if (SlippiSpectateClient::getInstance()->Active() &&
+	    !SlippiSpectateClient::getInstance()->ReplayPath().empty())
 		roomFlags |= PEPPY_ROOM_FLAG_WATCHABLE;
 	if (SlippiMatchmaking::PeppyBrowsing())
 		roomFlags |= PEPPY_ROOM_FLAG_BROWSING;
@@ -3932,6 +4060,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 			break;
 		case CMD_IS_FILE_READY:
 			prepareIsFileReady();
+			break;
+		case CMD_PEPPY_REPLAY_WAITING:
+			preparePeppyReplayWaiting();
 			break;
 		case CMD_GET_GECKO_CODES:
 			m_read_queue.clear();

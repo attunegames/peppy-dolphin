@@ -100,6 +100,10 @@ class CEXISlippi : public IEXIDevice
 		CMD_PEPPY_LIST_ROOMS = 0xC7,
 		CMD_PEPPY_LEAVE_ROOM = 0xC9,
 		CMD_PEPPY_JOIN_ROOM = 0xC8,
+		// Peppy: does Dolphin have a replay queued that has not been played yet?
+		// A peek - unlike CMD_IS_FILE_READY it does not load the game, so asking
+		// does not spend the answer the playback scene is waiting for.
+		CMD_PEPPY_REPLAY_WAITING = 0xCA,
 
 		// Misc
 		CMD_LOG_MESSAGE = 0xD0,
@@ -189,6 +193,7 @@ class CEXISlippi : public IEXIDevice
 	    {CMD_GET_PLAYER_SETTINGS, 0},
 	    {CMD_REPORT_MATCH_STATUS_UPDATE, static_cast<u32>(sizeof(SlippiExiTypes::ReportMatchStatusUpdateQuery) - 1)},
 
+<<<<<<< HEAD
 	    // mode byte, then listed/unlisted
 	    {CMD_PEPPY_CREATE_ROOM, 2},
 	    {CMD_PEPPY_SET_QUEUED, 1},
@@ -196,6 +201,10 @@ class CEXISlippi : public IEXIDevice
 	    // The mode, then four characters of room code.
 	    {CMD_PEPPY_JOIN_ROOM, 5},
 	    {CMD_PEPPY_LEAVE_ROOM, 1},
+=======
+	    // Peppy: no payload, the answer comes back on the read
+	    {CMD_PEPPY_REPLAY_WAITING, 0},
+>>>>>>> playback-in-session
 
 	    // Misc
 	    {CMD_LOG_MESSAGE, 0xFFFF}, // Variable size... will only work if by itself
@@ -290,6 +299,14 @@ class CEXISlippi : public IEXIDevice
 	void prepareFrameData(u8 *payload);
 	void prepareIsStockSteal(u8 *payload);
 	void prepareIsFileReady();
+	void preparePeppyReplayWaiting();
+
+	// Peppy: watches Melee's scene controller from outside the game, so a scene
+	// that hangs still reports where it stopped. The game's own logging goes
+	// quiet exactly when it is most needed.
+	void PeppySceneWatch();
+	std::thread m_peppySceneWatchThread;
+	bool peppySceneWatchRunning = false;
 
 	// misc stuff
 	void handleChatMessage(u8 *payload);
