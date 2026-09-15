@@ -2074,6 +2074,13 @@ std::vector<std::string> PeppyPunchListForNetplay()
 	return SlippiMatchmaking::PeppyPunchList();
 }
 
+// PeppyStun lives in the anonymous namespace above, so it has internal linkage
+// and SlippiSpectate.cpp cannot name it. Forwarded like PeppyPunchListForNetplay.
+bool PeppyStunForSpectate(ENetSocket sock, std::string &out)
+{
+	return PeppyStun(sock, out);
+}
+
 // Tell the room the external address of the socket a watcher's STREAM arrives
 // on, so the players can knock a hole for it.
 //

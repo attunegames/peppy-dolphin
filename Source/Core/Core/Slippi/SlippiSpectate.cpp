@@ -21,7 +21,7 @@
 
 // Defined in SlippiMatchmaking.cpp. Declared rather than included: that header
 // includes this one, and the cycle is not worth untangling for three symbols.
-bool PeppyStun(ENetSocket sock, std::string &out);
+bool PeppyStunForSpectate(ENetSocket sock, std::string &out);
 std::vector<std::string> PeppyPunchListForNetplay();
 void PeppyAnnounceWatchSocket(const std::string &external);
 
@@ -605,7 +605,7 @@ void SlippiSpectateClient::ClientThread(std::string host, u16 port)
 	// router's whole job. The players knock first, from their own spectate
 	// socket, using the address published here.
 	std::string watchExternal;
-	if (PeppyStun(client->socket, watchExternal))
+	if (PeppyStunForSpectate(client->socket, watchExternal))
 	{
 		PeppyAnnounceWatchSocket(watchExternal);
 		WARN_LOG(SLIPPI, "[Peppy] watcher's stream socket is %s - told the room so the players can let us in",
