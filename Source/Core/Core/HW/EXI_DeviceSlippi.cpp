@@ -2546,13 +2546,10 @@ void CEXISlippi::prepareOnlineMatchState()
 		SlippiMatchmaking::PeppyWatchSetMatchLatch(false);
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] Watch over - back to the character select");
 
-		// And straight back into the queue, exactly as finishing a game does.
-		// A spectator is someone waiting for a turn, so dropping them out of the
-		// queue when their watch ends is backwards: the two who just played stay
-		// queued and the one who has been waiting longest does not.
-		peppyRequeue = true;
-		peppyRequeueAt = Common::Timer::GetTimeMs();
-
+		// Not back into matchmaking, for the same reason a finished game is not:
+		// a watch that ends sends you to the ROOM, and you queue from there.
+		// Restarting matchmaking here raced the screen that would have taken you
+		// to it.
 		handleConnectionCleanup();
 		prepareOnlineMatchState();
 		return;
@@ -3701,13 +3698,18 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 		bool iWon = winnerIdx == matchmaking->LocalPlayerIndex();
 		matchmaking->PeppyReportResult(matchId, iWon);
 
-		// Finishing a game puts you back in the queue without pressing anything.
-		// You press Start once, when you arrive; after that the room runs itself
-		// and losing hands you straight back to the end of the line. Otherwise
-		// the loser has to remember to requeue, and the room quietly matches
-		// around them while they sit at the character select.
-		peppyRequeue = true;
-		peppyRequeueAt = Common::Timer::GetTimeMs();
+		// NOT back into matchmaking. Finishing a game sends you to the ROOM,
+		// and you queue from there by pressing Start, which is where the loop
+		// begins.
+		//
+		// This used to requeue for you, from a time when the room had no screen
+		// and the character select was where you waited. It is now the thing
+		// that stops you ever reaching the room: matchmaking restarts inside the
+		// few hundred milliseconds the character select is up, Melee starts a
+		// match from a result it still had lying around - the same match id, over
+		// and over - and the handler that would have sent you to the room never
+		// gets a turn. The screen shows DISCONNECTED and the pair replays the
+		// last game forever.
 
 		// Always. A finished game ends the session and everybody goes back to
 		// the room, whether or not anyone is waiting.
