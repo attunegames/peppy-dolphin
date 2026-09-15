@@ -491,6 +491,19 @@ void SlippiSpectateClient::Watch(const std::string &host, u16 port)
 {
 	if (m_running || host.empty())
 		return;
+
+	// Join whatever ran last, first.
+	//
+	// The thread clears m_running itself when it gives up - no peer slot, a host
+	// it cannot resolve, enet refusing to start - and nothing joined it, so it
+	// stays joinable. Assigning a new thread over a joinable one calls
+	// std::terminate, and Dolphin goes without a word: no crash box, no fault in
+	// the log, the file simply stops mid-session. Which is exactly what it did
+	// the moment the other two were paired and this client was told what to
+	// watch.
+	if (m_thread.joinable())
+		m_thread.join();
+
 	m_running = true;
 	m_thread = std::thread(&SlippiSpectateClient::ClientThread, this, host, port);
 }
