@@ -710,7 +710,11 @@ void PeppyShowRoom(const json &resp, u32 ms = 4000)
 	auto queue = resp.find("queue");
 	size_t waiting = (queue != resp.end() && queue->is_array()) ? queue->size() : 0;
 
-	if (resp.value("role", "") == "queued")
+	// Our own state, not the room's word for it. The room calls anybody without
+	// a pairing "queued", which was true while only queued clients asked - they
+	// ask from the lobby now too, so taking it at face value told somebody who
+	// had not pressed Start that they were next.
+	if (SlippiMatchmaking::PeppyQueued())
 	{
 		int pos = resp.value("position", 0);
 		out << "\nqueue: ";
