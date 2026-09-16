@@ -1265,7 +1265,11 @@ static std::atomic<bool> peppyRoomModuleServed{false};
 static void PeppyFindRoomModule()
 {
 	int found = 0;
-	for (u32 a = 0x80000000; a < 0x81700000 && found < 6; a += 4)
+	// Narrow, deliberately. This runs on the watcher thread while the CPU thread
+	// is emulating, and a 24MB sweep is 1.5M off-thread reads per room entry -
+	// too wide a window to keep pointing at the game when a client dies with no
+	// log line at all. Every copy we have measured lives in this heap.
+	for (u32 a = 0x80b00000; a < 0x80d00000 && found < 6; a += 4)
 	{
 		if (Memory::Read_U32(a) != 20396 || Memory::Read_U32(a + 4) != 0x00004f6c)
 			continue;
