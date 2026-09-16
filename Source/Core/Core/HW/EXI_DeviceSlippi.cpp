@@ -1234,6 +1234,51 @@ void CEXISlippi::prepareIsStockSteal(u8 *payload)
 	m_read_queue.push_back(playerIsBack);
 }
 
+// Peppy: the spectator's return, measured from OUT HERE.
+//
+// Three codeset probes aimed at this bug took the Rooms row off the online menu,
+// because every one of them sat on a path the whole game uses to resolve archive
+// symbols. This reads the same facts out of emulated RAM instead: it injects
+// nothing, so it cannot break a menu.
+//
+// What we already know: the room module transfers to 80bf0a20, 20396 bytes, on a
+// working entry AND on a failing return. m-ex then calls File_GetSymbol looking
+// for the "mnFunction" root, gets 0 back, and binds nothing - silently. That
+// walk reads the symbol count from 0xc(file), where file is a 0x44 struct
+// Archive_InitOnLoad filled in. The struct records its data base at +0x20, so
+// any struct describing our module has 0x80bf0a20 at that offset - which makes
+// it findable without knowing where the heap put it.
+//
+// PeppyRoom.dat has exactly one root, so a healthy entry reads nroots 1 in the
+// DAT header and 1 in the struct. Whatever differs on the return is the bug.
+static void PeppyDumpRoomArchive(const char *when)
+{
+	const u32 buf = 0x80bf0a20; // where the module lands, every time we have measured
+
+	u32 h[5];
+	for (int i = 0; i < 5; i++)
+		h[i] = Memory::Read_U32(buf + 4 * i);
+	WARN_LOG(SLIPPI,
+	         "[Peppy] %s: DAT at %08x filesize %u datasize %08x nrelocs %u nroots %u nrefs %u",
+	         when, buf, h[0], h[1], h[2], h[3], h[4]);
+
+	// The struct comes from the same heap right after the buffer, so a short sweep
+	// finds it without scanning all of RAM and hitching the frame.
+	int found = 0;
+	for (u32 a = 0x80bf0000; a < 0x80d00000 && found < 4; a += 4)
+	{
+		if (Memory::Read_U32(a) != buf)
+			continue;
+		const u32 st = a - 0x20;
+		WARN_LOG(SLIPPI, "[Peppy] %s: archive struct %08x nroots %u symtab %08x strtab %08x",
+		         when, st, Memory::Read_U32(st + 0xc), Memory::Read_U32(st + 0x28),
+		         Memory::Read_U32(st + 0x30));
+		found++;
+	}
+	if (found == 0)
+		WARN_LOG(SLIPPI, "[Peppy] %s: NO archive struct points at %08x", when, buf);
+}
+
 // Peppy: report Melee's scene controller whenever it changes.
 //
 // When a scene handover goes wrong the game stops logging, because the code that
@@ -1272,6 +1317,10 @@ void CEXISlippi::PeppySceneWatch()
 				                 "prev-minor %02x pending-minor %02x",
 				         (now >> 24) & 0xFF, (now >> 16) & 0xFF, now & 0xFF,
 				         (pending >> 24) & 0xFF, (pending >> 16) & 0xFF);
+
+				char label[64];
+				snprintf(label, sizeof(label), "scene %02x/%02x", (now >> 24) & 0xFF, now & 0xFF);
+				PeppyDumpRoomArchive(label);
 			}
 		}
 		Common::SleepCurrentThread(100);
