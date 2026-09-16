@@ -1306,6 +1306,10 @@ void CEXISlippi::preparePeppyReplayWaiting()
 // paired, or told to stop) or the broadcaster has ended the game. A new game
 // from the same broadcaster answers CMD_IS_REPLAY_READY first, so it is taken
 // before this is ever asked.
+// Defined in SlippiMatchmaking.cpp. Declared rather than included - that header
+// is already here, but this is a free function outside the class.
+void PeppyEndWatchForPlayback();
+
 void CEXISlippi::preparePeppyLeavePlayback()
 {
 	m_read_queue.clear();
@@ -1317,6 +1321,19 @@ void CEXISlippi::preparePeppyLeavePlayback()
 
 	auto *client = SlippiSpectateClient::getInstance();
 	bool leave = !client->Active() || !client->GameInProgress();
+
+	// Saying yes ENDS the watch here, not just on Melee's side.
+	//
+	// Leaving the playback scene was not enough on its own: Dolphin went on
+	// serving the watched match's block to prepareOnlineMatchState, the log
+	// filling with "Watch block slot 0 ... slot 1" while Melee sat on the menu,
+	// and Melee acted on a match it was not in. That is the "Invalid
+	// instruction" a returning watcher hit the moment it arrived.
+	if (leave)
+	{
+		WARN_LOG(SLIPPI_ONLINE, "[Peppy] watch over - telling Melee to go, and ending it here");
+		PeppyEndWatchForPlayback();
+	}
 
 	m_read_queue.push_back(leave ? 1 : 0);
 }

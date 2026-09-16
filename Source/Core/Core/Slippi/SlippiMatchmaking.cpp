@@ -2136,6 +2136,20 @@ std::vector<std::string> SlippiMatchmaking::PeppyPunchList()
 	return s_punch;
 }
 
+// A watch is over: stop answering as though one is running.
+//
+// Melee leaving the playback scene is not enough on its own. Dolphin goes on
+// serving the watched match's block to prepareOnlineMatchState - the log fills
+// with "Watch block slot 0 ... slot 1" on the menu - and Melee acts on a match
+// it is not in. That is the "Invalid instruction" on the way back from a watch.
+//
+// Free, for the same include-cycle reason as the punch list below.
+void PeppyEndWatchForPlayback()
+{
+	PeppyWatchStop();
+	SlippiSpectateClient::getInstance()->Stop();
+}
+
 // Reached from SlippiNetplay.cpp without including this header, which includes
 // that one. A free function is the cheaper way out of the circle.
 std::vector<std::string> PeppyPunchListForNetplay()
