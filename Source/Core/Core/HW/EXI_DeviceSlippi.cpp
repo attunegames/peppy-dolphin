@@ -1254,6 +1254,7 @@ void CEXISlippi::prepareIsStockSteal(u8 *payload)
 // Raised when Dolphin hands over the room module's bytes, so the watcher knows
 // to go and find where they actually landed.
 static std::atomic<bool> peppyRoomModuleServed{false};
+static std::atomic<u32> peppyRoomModuleDest{0};
 
 // Peppy: find where the room module's 20396 bytes actually went.
 //
@@ -1283,7 +1284,13 @@ static void PeppyFindRoomModule()
 
 static void PeppyDumpRoomArchive(const char *when)
 {
-	const u32 buf = 0x80bf0a20; // where the module lands, every time we have measured
+	// Not hardcoded any more: the destination moved from 80bf0a20 to 80bf0a40 the
+	// moment the preload cache was dropped, which made every reading against the
+	// old address meaningless. The file server records where it was last asked to
+	// go instead.
+	const u32 buf = peppyRoomModuleDest.load();
+	if (buf == 0)
+		return;
 
 	u32 h[5];
 	for (int i = 0; i < 5; i++)
@@ -4439,11 +4446,31 @@ void CEXISlippi::DMARead(u32 addr, u32 size)
 		return;
 	}
 
+	// Peppy: what the queue held BEFORE the resize.
+	//
+	// resize(size, 0) pads with ZEROS when the queue is shorter than the game
+	// asked for, silently. A module region full of zeros is exactly what "Unknown
+	// instruction 00000000" is executing, and exactly why a scan for the module's
+	// signature finds nothing - the bytes are written, they are just all zero.
+	const size_t peppyHad = m_read_queue.size();
+
 	m_read_queue.resize(size, 0); // Resize response array to make sure it's all full/allocated
 
 	auto queueAddr = &m_read_queue[0];
 	INFO_LOG(EXPANSIONINTERFACE, "EXI SLIPPI DMARead: addr: 0x%08x size: %d, startResp: [%02x %02x %02x %02x %02x]",
 	         addr, size, queueAddr[0], queueAddr[1], queueAddr[2], queueAddr[3], queueAddr[4]);
+
+	// Peppy: the only honest answer to "where did the module go".
+	//
+	// TransferFile.asm logs r27, which the PARENT set, several calls before this
+	// - so "dest 80bf0a40" is where Melee MEANT to put it. This is the address
+	// the write actually receives. Big reads are file loads and nothing else, so
+	// the filter keeps this to a handful of lines per scene.
+	if (size > 4096)
+		WARN_LOG(SLIPPI, "[Peppy] DMA write: %u asked -> %08x, queue had %u%s", size, addr,
+		         (u32)peppyHad, peppyHad < size ? "  <- SHORT, zero-padded" : "");
+	if (size == 20396)
+		peppyRoomModuleDest = addr;
 
 	// Copy buffer data to memory
 	Memory::CopyToEmu(addr, queueAddr, size);
