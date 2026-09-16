@@ -1255,6 +1255,8 @@ void CEXISlippi::prepareIsStockSteal(u8 *payload)
 // to go and find where they actually landed.
 static std::atomic<bool> peppyRoomModuleServed{false};
 static std::atomic<u32> peppyRoomModuleDest{0};
+static std::atomic<int> peppyTraceReads{0};
+static std::atomic<int> peppyTraceWrites{0};
 
 // Peppy: find where the room module's 20396 bytes actually went.
 //
@@ -3550,7 +3552,11 @@ void CEXISlippi::prepareFileLoad(u8 *payload)
 
 	WARN_LOG(SLIPPI, "[Peppy] file CONTENTS served: %s -> %u", fileName.c_str(), size);
 	if (fileName.find("PeppyRoom") != std::string::npos)
+	{
 		peppyRoomModuleServed = true;
+		peppyTraceReads = 6;
+		peppyTraceWrites = 6;
+	}
 
 	// Write the contents to output
 	m_read_queue.insert(m_read_queue.end(), buf.begin(), buf.end());
@@ -4207,6 +4213,16 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 	}
 
 	u8 byte = memPtr[0];
+
+	// Peppy: what the game asks for right after the room module is served. If it
+	// sends another command instead of reading, the read was skipped; if it sends
+	// nothing, it died in the hook.
+	if (peppyTraceWrites > 0)
+	{
+		peppyTraceWrites--;
+		WARN_LOG(SLIPPI, "[Peppy] trace CMD: %02x (%u bytes)", byte, _uSize);
+	}
+
 	if (byte == CMD_RECEIVE_COMMANDS)
 	{
 		time(&gameStartTime); // Store game start time
@@ -4466,7 +4482,18 @@ void CEXISlippi::DMARead(u32 addr, u32 size)
 	// - so "dest 80bf0a40" is where Melee MEANT to put it. This is the address
 	// the write actually receives. Big reads are file loads and nothing else, so
 	// the filter keeps this to a handful of lines per scene.
-	if (size > 4096)
+	// Peppy: on a spectator's return the room module is served and then never
+	// read - no DMA write line at all, where a working entry has one. A read of
+	// length ZERO looks exactly the same through a size filter, and so does no
+	// read happening. Log every exchange for a short window after the module is
+	// served so the two can be told apart.
+	if (peppyTraceReads > 0)
+	{
+		peppyTraceReads--;
+		WARN_LOG(SLIPPI, "[Peppy] trace READ: %u asked -> %08x, queue had %u", size, addr,
+		         (u32)peppyHad);
+	}
+	else if (size > 4096)
 		WARN_LOG(SLIPPI, "[Peppy] DMA write: %u asked -> %08x, queue had %u%s", size, addr,
 		         (u32)peppyHad, peppyHad < size ? "  <- SHORT, zero-padded" : "");
 	if (size == 20396)
