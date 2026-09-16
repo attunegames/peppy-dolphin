@@ -1333,6 +1333,25 @@ void CEXISlippi::preparePeppyLeavePlayback()
 	{
 		WARN_LOG(SLIPPI_ONLINE, "[Peppy] watch over - telling Melee to go, and ending it here");
 		PeppyEndWatchForPlayback();
+
+		// And put the CPU back to normal speed before Melee goes anywhere.
+		//
+		// The catch-up is an OVERCLOCK: setHardFFW turns on m_OCEnable and sets
+		// m_OCFactor to 4.0, and only setHardFFW(false) puts it back. A watch
+		// that ends while it is still engaged leaves the next scene running on a
+		// four-times CPU.
+		//
+		// That is the one thing every failed return had in common. The room
+		// arrived with its module transferred and never bound; the character
+		// select died inside SlippiCSS.dat; the menu hit an invalid instruction.
+		// Four destinations, four different failures, and the whole evening
+		// spent asking which destination was wrong - when what they shared was
+		// the machine underneath them.
+		if (g_playbackStatus)
+		{
+			g_playbackStatus->setHardFFW(false);
+			g_playbackStatus->isSoftFFW = false;
+		}
 	}
 
 	m_read_queue.push_back(leave ? 1 : 0);
