@@ -2146,8 +2146,19 @@ std::vector<std::string> SlippiMatchmaking::PeppyPunchList()
 // Free, for the same include-cycle reason as the punch list below.
 void PeppyEndWatchForPlayback()
 {
+	// Flags only. ⛔ NOT SlippiSpectateClient::Stop().
+	//
+	// This runs on the emulation thread, inside an EXI handler, and Stop() joins
+	// the client thread and closes the replay file - while playback may be part
+	// way through reading it. Dolphin went without a word: black, then the
+	// window gone, nothing in the log after the roster line. Same shape as
+	// assigning over a joinable thread earlier tonight.
+	//
+	// Clearing the flags is all this needs to do. It is what stops
+	// prepareOnlineMatchState serving the watched match's block, which is the
+	// thing that was killing the menu. The client is torn down by whoever owns
+	// it, off this thread.
 	PeppyWatchStop();
-	SlippiSpectateClient::getInstance()->Stop();
 }
 
 // Reached from SlippiNetplay.cpp without including this header, which includes
