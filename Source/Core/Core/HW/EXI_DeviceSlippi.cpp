@@ -1251,6 +1251,32 @@ void CEXISlippi::prepareIsStockSteal(u8 *payload)
 //
 // PeppyRoom.dat has exactly one root, so a healthy entry reads nroots 1 in the
 // DAT header and 1 in the struct. Whatever differs on the return is the bug.
+// Raised when Dolphin hands over the room module's bytes, so the watcher knows
+// to go and find where they actually landed.
+static std::atomic<bool> peppyRoomModuleServed{false};
+
+// Peppy: find where the room module's 20396 bytes actually went.
+//
+// "replacing a file, dest 80bf0a20" is only where Melee MEANT to put it - the
+// hook logs r27, which the parent set, and the DMA happens several calls later.
+// A crash executing zeros at 80bf59e0 (the buffer plus its aligned size) says
+// that trust is misplaced. The DAT starts with its own filesize, so the module
+// is findable wherever it is: filesize 20396 then datasize 0x4f6c.
+static void PeppyFindRoomModule()
+{
+	int found = 0;
+	for (u32 a = 0x80000000; a < 0x81700000 && found < 6; a += 4)
+	{
+		if (Memory::Read_U32(a) != 20396 || Memory::Read_U32(a + 4) != 0x00004f6c)
+			continue;
+		WARN_LOG(SLIPPI, "[Peppy] room module found at %08x %s", a,
+		         a == 0x80bf0a20 ? "(where it was supposed to go)" : "<- NOT the logged dest");
+		found++;
+	}
+	if (found == 0)
+		WARN_LOG(SLIPPI, "[Peppy] room module is NOWHERE in RAM - the bytes were never written");
+}
+
 static void PeppyDumpRoomArchive(const char *when)
 {
 	const u32 buf = 0x80bf0a20; // where the module lands, every time we have measured
@@ -1267,7 +1293,7 @@ static void PeppyDumpRoomArchive(const char *when)
 	int found = 0;
 	for (u32 a = 0x80bf0000; a < 0x80d00000 && found < 4; a += 4)
 	{
-		if (Memory::Read_U32(a) != buf)
+		if (Memory::Read_U32(a) != buf + 0x20)
 			continue;
 		const u32 st = a - 0x20;
 		WARN_LOG(SLIPPI, "[Peppy] %s: archive struct %08x nroots %u symtab %08x strtab %08x",
@@ -1290,6 +1316,7 @@ void CEXISlippi::PeppySceneWatch()
 {
 	u32 last = 0xFFFFFFFF;
 	u32 lastPending = 0xFFFFFFFF;
+	u32 lastHdr = 0xFFFFFFFF;
 	while (peppySceneWatchRunning)
 	{
 		if (Memory::IsInitialized())
@@ -1322,7 +1349,26 @@ void CEXISlippi::PeppySceneWatch()
 				snprintf(label, sizeof(label), "scene %02x/%02x", (now >> 24) & 0xFF, now & 0xFF);
 				PeppyDumpRoomArchive(label);
 			}
+
+			// Peppy: and watch the module region itself. The room's 20396 bytes are
+			// DMA'd to a destination the PARENT put in r27, so "replacing a file,
+			// dest 80bf0a20" only says where Melee meant to put it. Watching the
+			// header change says whether it ever got there.
+			if (Memory::IsInitialized())
+			{
+				const u32 hdr = Memory::Read_U32(0x80bf0a20);
+				if (hdr != lastHdr)
+				{
+					lastHdr = hdr;
+					WARN_LOG(SLIPPI, "[Peppy] 80bf0a20 header now %08x (%u) %s", hdr, hdr,
+					         hdr == 20396 ? "<- the room module" : "");
+				}
+			}
 		}
+
+		if (peppyRoomModuleServed.exchange(false) && Memory::IsInitialized())
+			PeppyFindRoomModule();
+
 		Common::SleepCurrentThread(100);
 	}
 }
@@ -3475,7 +3521,7 @@ void CEXISlippi::prepareFileLength(u8 *payload)
 	std::string contents;
 	u32 size = gameFileLoader->LoadFile(fileName, contents);
 
-	INFO_LOG(SLIPPI, "Getting file size for: %s -> %d", fileName.c_str(), size);
+	WARN_LOG(SLIPPI, "[Peppy] file LENGTH asked: %s -> %u", fileName.c_str(), size);
 
 	// Write size to output
 	appendWordToBuffer(&m_read_queue, size);
@@ -3491,7 +3537,9 @@ void CEXISlippi::prepareFileLoad(u8 *payload)
 	u32 size = gameFileLoader->LoadFile(fileName, contents);
 	std::vector<u8> buf(contents.begin(), contents.end());
 
-	INFO_LOG(SLIPPI, "Writing file contents: %s -> %d", fileName.c_str(), size);
+	WARN_LOG(SLIPPI, "[Peppy] file CONTENTS served: %s -> %u", fileName.c_str(), size);
+	if (fileName.find("PeppyRoom") != std::string::npos)
+		peppyRoomModuleServed = true;
 
 	// Write the contents to output
 	m_read_queue.insert(m_read_queue.end(), buf.begin(), buf.end());
